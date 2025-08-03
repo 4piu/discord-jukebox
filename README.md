@@ -7,7 +7,7 @@ A Discord music bot.
 - **Modern Slash Commands** - All commands use Discord's `/` syntax with auto-complete
 - Play music from YouTube, SoundCloud, and other supported platforms
 - Advanced queue system with flexible positioning
-- Playlist support (up to 10 songs per playlist)
+- Playlist support
 - Full playback controls (play, pause, resume, stop, skip)
 - Volume control
 - Queue management (view, clear, move, remove)
