@@ -85,9 +85,10 @@ class YTDLSource(discord.PCMVolumeTransformer):
         super().__init__(source, volume)
 
     @classmethod
-    async def from_url(cls, url, *, loop=None, stream=False):
+    async def from_url(cls, url, guild_id, *, loop=None, stream=False):
         source = await get_audio_source(url)
-        return cls(source)
+        queue = get_queue(guild_id)
+        return cls(source, volume=queue.get_volume())
 
 
 class MusicQueue:
@@ -95,6 +96,7 @@ class MusicQueue:
         self.queue = deque()
         self.current = None
         self.is_playing = False
+        self.volume = 0.5  # Default volume (50%)
 
     def add(self, song_data, position="end"):
         """Add a song to the queue
@@ -118,6 +120,14 @@ class MusicQueue:
 
     def get_queue_list(self):
         return list(self.queue)
+
+    def set_volume(self, volume):
+        """Set volume (0.0 to 1.0)"""
+        self.volume = volume
+
+    def get_volume(self):
+        """Get current volume (0.0 to 1.0)"""
+        return self.volume
 
 
 # Dictionary to store music queues for each guild
@@ -390,7 +400,7 @@ async def cmd_playnow(interaction: discord.Interaction, query: str):
         queue.current = song_info
         queue.is_playing = True
 
-        player = await YTDLSource.from_url(song_info["url"], loop=bot.loop, stream=True)
+        player = await YTDLSource.from_url(song_info["url"], interaction.guild.id, loop=bot.loop, stream=True)
 
         def after_playing(error):
             if error:
@@ -453,7 +463,7 @@ async def play_next(interaction):
     queue.current = song_info
 
     try:
-        player = await YTDLSource.from_url(song_info["url"], loop=bot.loop, stream=True)
+        player = await YTDLSource.from_url(song_info["url"], interaction.guild.id, loop=bot.loop, stream=True)
 
         def after_playing(error):
             if error:
@@ -695,11 +705,17 @@ async def cmd_volume(interaction: discord.Interaction, volume: int):
         )
         return
 
+    # Convert percentage to decimal and store in queue
+    volume_decimal = volume / 100
+    queue = get_queue(interaction.guild.id)
+    queue.set_volume(volume_decimal)
+
+    # Apply to current playing song if any
     if interaction.guild.voice_client.source:
-        interaction.guild.voice_client.source.volume = volume / 100
-        await interaction.response.send_message(f"🔊 Volume set to {volume}%")
+        interaction.guild.voice_client.source.volume = volume_decimal
+        await interaction.response.send_message(f"🔊 Volume set to {volume}% (current song updated)")
     else:
-        await interaction.response.send_message("Nothing is playing!", ephemeral=True)
+        await interaction.response.send_message(f"🔊 Volume set to {volume}% (will apply to next song)")
 
 
 @bot.tree.command(name="nowplaying", description="Show the currently playing song")
@@ -834,7 +850,7 @@ async def play_next_auto(guild_id, channel):
         if not guild or not guild.voice_client:
             return
 
-        player = await YTDLSource.from_url(song_info["url"], loop=bot.loop, stream=True)
+        player = await YTDLSource.from_url(song_info["url"], guild_id, loop=bot.loop, stream=True)
 
         def after_playing(error):
             if error:
