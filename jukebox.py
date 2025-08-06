@@ -28,7 +28,7 @@ PLAYLIST_LIMIT = int(
 intents = discord.Intents.default()
 # intents.message_content = True
 intents.voice_states = True
-bot = commands.Bot(command_prefix=None, intents=intents)
+bot = commands.Bot(command_prefix="!", intents=intents)  # Set a prefix to avoid catching all messages
 
 # yt-dlp configuration
 ytdl_format_options = {
