@@ -74,6 +74,8 @@ For workaround CAPTCHA or accessing private playlists, you can provide a cookies
 
 **Note**: Keep your cookies file secure and don't share it, as it contains your authentication information.
 
+**See also: [yt-dlp Wiki: Extractors](https://github.com/yt-dlp/yt-dlp/wiki/Extractors#exporting-youtube-cookies)
+
 ## Permissions Required
 
 Your bot needs the following Discord permissions:
