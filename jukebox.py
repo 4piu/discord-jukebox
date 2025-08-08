@@ -155,7 +155,7 @@ async def ensure_guild(interaction: discord.Interaction) -> bool:
     """
     if not interaction.guild:
         await interaction.response.send_message(
-            "This command can only be used in a server, not in DMs!", ephemeral=True
+            "❌ This command can only be used in a server, not in DMs!", ephemeral=True
         )
         return False
     return True
@@ -178,7 +178,7 @@ async def ensure_voice(interaction: discord.Interaction) -> bool:
     # Check if user is in a voice channel
     if not interaction.user.voice:
         await interaction.response.send_message(
-            "You need to be in a voice channel to use this command!", ephemeral=True
+            "🔊 You need to be in a voice channel to use this command!", ephemeral=True
         )
         return False
 
@@ -194,7 +194,7 @@ async def ensure_voice(interaction: discord.Interaction) -> bool:
                 f"Failed to connect to voice channel {channel}: {e}", exc_info=True
             )
             await interaction.response.send_message(
-                f"Failed to join voice channel: {str(e)}", ephemeral=True
+                f"❌ Failed to join voice channel: {str(e)}", ephemeral=True
             )
             return False
 
@@ -301,7 +301,7 @@ async def cmd_play(interaction: discord.Interaction, query: str):
         )
 
         if not entries:
-            await interaction.followup.send("No songs found!")
+            await interaction.followup.send("❌ No songs found!")
             return
 
         # Add all songs to queue
@@ -319,9 +319,9 @@ async def cmd_play(interaction: discord.Interaction, query: str):
 
         # Send response based on single vs playlist
         await interaction.followup.send(
-            f"Added to queue: **{entries[0]['title']}**"
+            f"✅ Added to queue: **{entries[0]['title']}**"
             if is_single_video
-            else f"Added {added_count} songs from playlist to queue"
+            else f"✅ Added {added_count} songs from playlist to queue"
             + (f" (limited from {total_count} total)" if was_limited else "")
         )
 
@@ -331,7 +331,7 @@ async def cmd_play(interaction: discord.Interaction, query: str):
 
     except Exception as e:
         logging.error(f"Error in play command: {e}", exc_info=True)
-        await interaction.followup.send(f"An error occurred: {str(e)}")
+        await interaction.followup.send(f"❌ An error occurred: {str(e)}")
 
 
 @bot.tree.command(
@@ -356,7 +356,7 @@ async def cmd_playnow(interaction: discord.Interaction, query: str):
         )
 
         if not entries:
-            await interaction.followup.send("No songs found!")
+            await interaction.followup.send("❌ No songs found!")
             return
 
         # Take first song for immediate play
@@ -383,11 +383,11 @@ async def cmd_playnow(interaction: discord.Interaction, query: str):
                 queue.add(playlist_song, "next")
 
             await interaction.followup.send(
-                f"Playing now: **{song_info['title']}**\nAdded {len(remaining_entries)} more songs from playlist to queue"
+                f"🎵 Playing now: **{song_info['title']}**\n✅ Added {len(remaining_entries)} more songs from playlist to queue"
                 + (f" (limited from {total_count} total songs)" if was_limited else "")
             )
         else:
-            await interaction.followup.send(f"Playing now: **{song_info['title']}**")
+            await interaction.followup.send(f"🎵 Playing now: **{song_info['title']}**")
 
         # Stop current song if playing
         if (
@@ -446,7 +446,7 @@ async def cmd_playnow(interaction: discord.Interaction, query: str):
 
     except Exception as e:
         logging.error(f"Error in playnow command: {e}", exc_info=True)
-        await interaction.followup.send(f"An error occurred: {str(e)}")
+        await interaction.followup.send(f"❌ An error occurred: {str(e)}")
 
 
 # Helper function for slash commands
@@ -455,7 +455,7 @@ async def play_next(interaction):
 
     if not queue.queue:
         queue.is_playing = False
-        await interaction.followup.send("Queue is empty!")
+        await interaction.followup.send("📭 Queue is empty!")
         return
 
     queue.is_playing = True
@@ -493,7 +493,7 @@ async def play_next(interaction):
 
     except Exception as e:
         logging.error(f"Error playing song: {e}", exc_info=True)
-        await interaction.followup.send(f"Error playing song: {str(e)}")
+        await interaction.followup.send(f"❌ Error playing song: {str(e)}")
         queue.is_playing = False
         await play_next(interaction)
 
@@ -518,7 +518,7 @@ async def cmd_playnext(interaction: discord.Interaction, query: str):
         )
 
         if not entries:
-            await interaction.followup.send("No songs found!")
+            await interaction.followup.send("❌ No songs found!")
             return
 
         # Add all songs to front of queue in reverse order so first song plays first
@@ -535,9 +535,9 @@ async def cmd_playnext(interaction: discord.Interaction, query: str):
             added_count += 1
 
         await interaction.followup.send(
-            f"Added to queue: **{entries[0]['title']}**"
+            f"📃 Added to queue: **{entries[0]['title']}**"
             if is_single_video
-            else f"Added {added_count} songs from playlist to queue"
+            else f"📃 Added {added_count} songs from playlist to queue"
             + (f" (limited from {total_count} total)" if was_limited else "")
         )
 
@@ -547,7 +547,7 @@ async def cmd_playnext(interaction: discord.Interaction, query: str):
 
     except Exception as e:
         logging.error(f"Error in playnext command: {e}", exc_info=True)
-        await interaction.followup.send(f"An error occurred: {str(e)}")
+        await interaction.followup.send(f"❌ An error occurred: {str(e)}")
 
 
 @bot.tree.command(name="queue", description="Show the current music queue")
@@ -559,7 +559,7 @@ async def cmd_queue(interaction: discord.Interaction):
     queue_list = queue.get_queue_list()
 
     if not queue_list and not queue.current:
-        await interaction.response.send_message("Queue is empty!", ephemeral=True)
+        await interaction.response.send_message("📭 Queue is empty!", ephemeral=True)
         return
 
     embed = discord.Embed(title="Music Queue", color=0x0099FF)
@@ -581,7 +581,7 @@ async def cmd_queue(interaction: discord.Interaction):
             )
             queue_text += f"**{i}.** **{song['title']}** {duration_str}\n   Requested by {song['requester'].mention}\n\n"
 
-        embed.add_field(name="📋 Up Next", value=queue_text[:1024], inline=False)
+        embed.add_field(name="📃 Up Next", value=queue_text[:1024], inline=False)
 
         if len(queue_list) > 10:
             embed.add_field(
@@ -602,7 +602,7 @@ async def cmd_skip(interaction: discord.Interaction):
         interaction.guild.voice_client.stop()
         await interaction.response.send_message("⏭️ Skipped!")
     else:
-        await interaction.response.send_message("Nothing is playing!", ephemeral=True)
+        await interaction.response.send_message("❌ Nothing is playing!", ephemeral=True)
 
 
 @bot.tree.command(name="join", description="Join your voice channel")
@@ -620,16 +620,16 @@ async def cmd_join(interaction: discord.Interaction):
     if interaction.guild.voice_client.channel != channel:
         try:
             await interaction.guild.voice_client.move_to(channel)
-            await interaction.response.send_message(f"Moved to {channel}")
+            await interaction.response.send_message(f"🎧 Moved to {channel}")
         except Exception as e:
             logging.error(
                 f"Failed to move to voice channel {channel}: {e}", exc_info=True
             )
             await interaction.response.send_message(
-                f"Failed to move to voice channel: {str(e)}", ephemeral=True
+                f"❌ Failed to move to voice channel: {str(e)}", ephemeral=True
             )
     else:
-        await interaction.response.send_message(f"Already connected to {channel}")
+        await interaction.response.send_message(f"🎧 Already connected to {channel}")
 
 
 @bot.tree.command(name="leave", description="Leave the voice channel")
@@ -642,10 +642,10 @@ async def cmd_leave(interaction: discord.Interaction):
         queue.clear()
         queue.is_playing = False
         await interaction.guild.voice_client.disconnect()
-        await interaction.response.send_message("Left the voice channel")
+        await interaction.response.send_message("👋 Left the voice channel")
     else:
         await interaction.response.send_message(
-            "I'm not in a voice channel!", ephemeral=True
+            "❌ I'm not in a voice channel!", ephemeral=True
         )
 
 
@@ -661,7 +661,7 @@ async def cmd_stop(interaction: discord.Interaction):
         interaction.guild.voice_client.stop()
         await interaction.response.send_message("⏹️ Stopped playing and cleared queue!")
     else:
-        await interaction.response.send_message("Not playing anything!", ephemeral=True)
+        await interaction.response.send_message("❌ Not playing anything!", ephemeral=True)
 
 
 @bot.tree.command(name="pause", description="Pause the current song")
@@ -673,7 +673,7 @@ async def pause_slash(interaction: discord.Interaction):
         interaction.guild.voice_client.pause()
         await interaction.response.send_message("⏸️ Paused!")
     else:
-        await interaction.response.send_message("Nothing is playing!", ephemeral=True)
+        await interaction.response.send_message("❌ Nothing is playing!", ephemeral=True)
 
 
 @bot.tree.command(name="resume", description="Resume the paused song")
@@ -685,7 +685,7 @@ async def cmd_resume(interaction: discord.Interaction):
         interaction.guild.voice_client.resume()
         await interaction.response.send_message("▶️ Resumed!")
     else:
-        await interaction.response.send_message("Nothing is paused!", ephemeral=True)
+        await interaction.response.send_message("❌ Nothing is paused!", ephemeral=True)
 
 
 @bot.tree.command(name="volume", description="Change the volume (0-100)")
@@ -695,13 +695,13 @@ async def cmd_volume(interaction: discord.Interaction, volume: int):
 
     if not interaction.guild.voice_client:
         await interaction.response.send_message(
-            "Not connected to a voice channel!", ephemeral=True
+            "❌ Not connected to a voice channel!", ephemeral=True
         )
         return
 
     if not 0 <= volume <= 100:
         await interaction.response.send_message(
-            "Volume must be between 0 and 100!", ephemeral=True
+            "❌ Volume must be between 0 and 100!", ephemeral=True
         )
         return
 
@@ -726,7 +726,7 @@ async def cmd_nowplaying(interaction: discord.Interaction):
     queue = get_queue(interaction.guild.id)
 
     if not queue.current:
-        await interaction.response.send_message("Nothing is playing!", ephemeral=True)
+        await interaction.response.send_message("❌ Nothing is playing!", ephemeral=True)
         return
 
     song = queue.current
@@ -766,7 +766,7 @@ async def cmd_move(
     queue_list = queue.get_queue_list()
 
     if not queue_list:
-        await interaction.response.send_message("Queue is empty!", ephemeral=True)
+        await interaction.response.send_message("📭 Queue is empty!", ephemeral=True)
         return
 
     # Convert to 0-based indexing
@@ -775,14 +775,14 @@ async def cmd_move(
 
     if not (0 <= from_index < len(queue_list)) or not (0 <= to_index < len(queue_list)):
         await interaction.response.send_message(
-            f"Invalid position! Queue has {len(queue_list)} songs (1-{len(queue_list)})",
+            f"❌ Invalid position! Queue has {len(queue_list)} songs (1-{len(queue_list)})",
             ephemeral=True,
         )
         return
 
     if from_index == to_index:
         await interaction.response.send_message(
-            "Source and destination positions are the same!", ephemeral=True
+            "❌ Source and destination positions are the same!", ephemeral=True
         )
         return
 
@@ -807,7 +807,7 @@ async def cmd_remove(interaction: discord.Interaction, position: int):
     queue_list = queue.get_queue_list()
 
     if not queue_list:
-        await interaction.response.send_message("Queue is empty!", ephemeral=True)
+        await interaction.response.send_message("📭 Queue is empty!", ephemeral=True)
         return
 
     # Convert to 0-based indexing
@@ -815,7 +815,7 @@ async def cmd_remove(interaction: discord.Interaction, position: int):
 
     if not (0 <= index < len(queue_list)):
         await interaction.response.send_message(
-            f"Invalid position! Queue has {len(queue_list)} songs (1-{len(queue_list)})",
+            f"❌ Invalid position! Queue has {len(queue_list)} songs (1-{len(queue_list)})",
             ephemeral=True,
         )
         return
