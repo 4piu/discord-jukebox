@@ -114,6 +114,7 @@ class MusicQueue:
         self.is_playing = False
         self.volume = 0.5  # Default volume (50%)
         self.consecutive_errors = 0  # Track consecutive playback errors
+        self._stop_event = asyncio.Event()  # Event to coordinate stopping/starting
 
     def add(self, song_data, position="end"):
         """Add a song to the queue
@@ -164,6 +165,18 @@ class MusicQueue:
     def get_error_count(self):
         """Get current consecutive error count"""
         return self.consecutive_errors
+
+    def signal_stop(self):
+        """Signal that playback should stop (used for manual stops)"""
+        self._stop_event.set()
+
+    def clear_stop_signal(self):
+        """Clear the stop signal"""
+        self._stop_event.clear()
+
+    def should_stop(self):
+        """Check if playback should stop"""
+        return self._stop_event.is_set()
 
 
 # Dictionary to store music queues for each guild
@@ -425,15 +438,19 @@ async def cmd_playnow(interaction: discord.Interaction, query: str):
         else:
             await interaction.followup.send(f"🎵 Playing now: **{song_info['title']}**")
 
-        # Stop current song if playing
+        # Stop current song if playing and wait for it to finish
         if (
             interaction.guild.voice_client
             and interaction.guild.voice_client.is_playing()
         ):
+            queue.signal_stop()  # Signal that we want to stop
             interaction.guild.voice_client.stop()
+            # Give a moment for the stop to process
+            await asyncio.sleep(0.1)
 
         # Reset error count when manually starting playback
         queue.reset_error_count()
+        queue.clear_stop_signal()  # Clear stop signal for new song
         
         # Set as current and play immediately
         queue.current = song_info
@@ -663,6 +680,8 @@ async def cmd_skip(interaction: discord.Interaction):
         return
 
     if interaction.guild.voice_client and interaction.guild.voice_client.is_playing():
+        queue = get_queue(interaction.guild.id)
+        queue.signal_stop()  # Signal stop but let auto-play continue normally
         interaction.guild.voice_client.stop()
         await interaction.response.send_message("⏭️ Skipped!")
     else:
@@ -722,6 +741,7 @@ async def cmd_stop(interaction: discord.Interaction):
         queue = get_queue(interaction.guild.id)
         queue.clear()
         queue.is_playing = False
+        queue.signal_stop()  # Signal complete stop
         interaction.guild.voice_client.stop()
         await interaction.response.send_message("⏹️ Stopped playing and cleared queue!")
     else:
@@ -920,6 +940,16 @@ async def cmd_remove(interaction: discord.Interaction, position: int):
 async def play_next_auto(guild_id, channel):
     """Automatically play next song after current one finishes"""
     queue = get_queue(guild_id)
+
+    # Check if this was a manual stop (playnow, stop command)
+    if queue.should_stop():
+        # For /stop command, keep the stop signal to prevent further auto-play
+        # For /skip or /playnow, they will clear the signal when ready
+        if not queue.queue or not queue.is_playing:
+            # This was a complete stop, don't continue
+            return
+        # Otherwise clear the signal and continue (this was a skip)
+        queue.clear_stop_signal()
 
     # Check if we've hit the maximum consecutive errors
     if queue.get_error_count() >= MAX_PLAYBACK_ERRORS:
