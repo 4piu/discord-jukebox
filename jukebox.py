@@ -25,13 +25,13 @@ PLAYLIST_LIMIT = int(
 )  # Default to 10, -1 means no limit
 
 # Cookie file configuration
-COOKIE_FILE = os.getenv("COOKIE_FILE")
-if COOKIE_FILE:
-    if not os.path.exists(COOKIE_FILE):
-        logging.warning(f"Cookie file {COOKIE_FILE} not found, ignoring...")
-        COOKIE_FILE = None
+COOKIES_FILE = os.getenv("COOKIES_FILE")
+if COOKIES_FILE:
+    if not os.path.exists(COOKIES_FILE):
+        logging.warning(f"Cookie file {COOKIES_FILE} not found, ignoring...")
+        COOKIES_FILE = None
     else:
-        logging.info(f"Using cookie file: {COOKIE_FILE}")
+        logging.info(f"Using cookie file: {COOKIES_FILE}")
 
 MAX_PLAYBACK_ERRORS = 3  # Max playback errors before stopping
 
@@ -68,9 +68,9 @@ ytdl_audio_options = {
 }
 
 # Add cookies to audio options as well
-if COOKIE_FILE:
-    ytdl_format_options["cookiefile"] = COOKIE_FILE
-    ytdl_audio_options["cookiefile"] = COOKIE_FILE
+if COOKIES_FILE:
+    ytdl_format_options["cookiefile"] = COOKIES_FILE
+    ytdl_audio_options["cookiefile"] = COOKIES_FILE
 
 ffmpeg_options = {
     "before_options": "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5",

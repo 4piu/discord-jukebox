@@ -69,7 +69,7 @@ For workaround CAPTCHA or accessing private playlists, you can provide a cookies
 
 1. **Export cookies** from your browser using a browser extension (like "Get cookies.txt")
 2. **Save the file** as `cookies.txt` 
-3. **Set the environment variable**: `COOKIE_FILE=/path/to/cookies.txt` (path inside container)
+3. **Set the environment variable**: `COOKIES_FILE=/path/to/cookies.txt` (path inside container)
 4. **With Docker**: Mount the file into the container (see Docker section below)
 
 **Note**: Keep your cookies file secure and don't share it, as it contains your authentication information.
@@ -120,7 +120,7 @@ docker run -d \
   --restart unless-stopped \
   -e TOKEN=your_discord_bot_token_here \
   -e PLAYLIST_LIMIT=50 \
-  -e COOKIE_FILE=/app/cookies.txt \
+  -e COOKIES_FILE=/app/cookies.txt \
   -v /path/to/your/cookies.txt:/app/cookies.txt:ro \
   ghcr.io/4piu/discord-jukebox:latest
 ```
@@ -132,7 +132,7 @@ docker run -d \
    DISCORD_TOKEN=your_discord_bot_token_here
    PLAYLIST_LIMIT=50
    # Optional: For authentication with cookies
-   # COOKIE_FILE=/path/to/your/cookies.txt
+   # COOKIES_FILE=/path/to/your/cookies.txt
    ```
 3. **If using cookies**: Uncomment and modify the volume mount in `docker-compose.yml`:
    ```yaml
@@ -140,7 +140,7 @@ docker run -d \
      - ./temp:/tmp
      - ./cookies.txt:/app/cookies.txt:ro  # Mount your cookies file
    ```
-   Then set `COOKIE_FILE=/app/cookies.txt` in your `.env` file
+   Then set `COOKIES_FILE=/app/cookies.txt` in your `.env` file
 4. Start the container:
    ```bash
    docker compose up -d
@@ -152,7 +152,7 @@ docker run -d \
 |----------|-------------|---------|----------|
 | `TOKEN` | Discord bot token | - | Yes |
 | `PLAYLIST_LIMIT` | Maximum songs in playlist (-1 for unlimited) | 50 | No |
-| `COOKIE_FILE` | Path to cookies file for yt-dlp authentication | - | No |
+| `COOKIES_FILE` | Path to cookies file for yt-dlp authentication | - | No |
 
 ## Container Features
 
