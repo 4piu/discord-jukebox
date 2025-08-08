@@ -63,6 +63,17 @@ The bot supports any source that yt-dlp can handle, including:
 - Bandcamp
 - And many more
 
+## Authentication with Cookies
+
+For workaround CAPTCHA or accessing private playlists, you can provide a cookies file:
+
+1. **Export cookies** from your browser using a browser extension (like "Get cookies.txt")
+2. **Save the file** as `cookies.txt` 
+3. **Set the environment variable**: `COOKIE_FILE=/path/to/cookies.txt` (path inside container)
+4. **With Docker**: Mount the file into the container (see Docker section below)
+
+**Note**: Keep your cookies file secure and don't share it, as it contains your authentication information.
+
 ## Permissions Required
 
 Your bot needs the following Discord permissions:
@@ -102,14 +113,35 @@ docker run -d \
   ghcr.io/4piu/discord-jukebox:latest
 ```
 
+**With cookies file:**
+```bash
+docker run -d \
+  --name discord-jukebox \
+  --restart unless-stopped \
+  -e TOKEN=your_discord_bot_token_here \
+  -e PLAYLIST_LIMIT=50 \
+  -e COOKIE_FILE=/app/cookies.txt \
+  -v /path/to/your/cookies.txt:/app/cookies.txt:ro \
+  ghcr.io/4piu/discord-jukebox:latest
+```
+
 ### Option 2: Docker Compose
 1. Copy the `docker-compose.yml` file to your deployment directory
 2. Create a `.env` file with your configuration:
    ```env
    DISCORD_TOKEN=your_discord_bot_token_here
    PLAYLIST_LIMIT=50
+   # Optional: For authentication with cookies
+   # COOKIE_FILE=/path/to/your/cookies.txt
    ```
-3. Start the container:
+3. **If using cookies**: Uncomment and modify the volume mount in `docker-compose.yml`:
+   ```yaml
+   volumes:
+     - ./temp:/tmp
+     - ./cookies.txt:/app/cookies.txt:ro  # Mount your cookies file
+   ```
+   Then set `COOKIE_FILE=/app/cookies.txt` in your `.env` file
+4. Start the container:
    ```bash
    docker compose up -d
    ```
@@ -120,6 +152,7 @@ docker run -d \
 |----------|-------------|---------|----------|
 | `TOKEN` | Discord bot token | - | Yes |
 | `PLAYLIST_LIMIT` | Maximum songs in playlist (-1 for unlimited) | 50 | No |
+| `COOKIE_FILE` | Path to cookies file for yt-dlp authentication | - | No |
 
 ## Container Features
 

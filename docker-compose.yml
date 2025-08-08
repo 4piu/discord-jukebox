@@ -8,9 +8,15 @@ services:
     environment:
       - TOKEN=${DISCORD_TOKEN}
       - PLAYLIST_LIMIT=${PLAYLIST_LIMIT:-50}
+      - COOKIE_FILE=${COOKIE_FILE:-}
     volumes:
       # Optional: Mount a directory for temporary audio files if needed
       - ./temp:/tmp
+      # Optional: Mount cookie file for yt-dlp authentication
+      # Uncomment and modify the path below if you want to use cookies
+      # - ./cookies.txt:/app/cookies.txt
+    # If COOKIE_FILE is set, you can mount it like this:
+    # - ${COOKIE_FILE}:/app/cookies.txt
     # Uncomment the following lines if you need to expose any ports
     # ports:
     #   - "8080:8080"
@@ -29,3 +35,4 @@ services:
 # Create a .env file in the same directory with:
 # DISCORD_TOKEN=your_discord_bot_token_here
 # PLAYLIST_LIMIT=50
+# COOKIE_FILE=/path/to/your/cookies.txt

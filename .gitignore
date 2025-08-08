@@ -201,3 +201,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Cookies file for yt-dlp authentication
+cookies.txt
