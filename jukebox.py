@@ -121,6 +121,13 @@ class MusicQueue:
     def get_queue_list(self):
         return list(self.queue)
 
+    def shuffle(self):
+        """Shuffle the queue"""
+        import random
+        queue_list = list(self.queue)
+        random.shuffle(queue_list)
+        self.queue = deque(queue_list)
+
     def set_volume(self, volume):
         """Set volume (0.0 to 1.0)"""
         self.volume = volume
@@ -753,6 +760,27 @@ async def cmd_clear(interaction: discord.Interaction):
     queue = get_queue(interaction.guild.id)
     queue.clear()
     await interaction.response.send_message("🗑️ Queue cleared!")
+
+
+@bot.tree.command(name="shuffle", description="Shuffle the current queue")
+async def cmd_shuffle(interaction: discord.Interaction):
+    if not await ensure_guild(interaction):
+        return
+
+    queue = get_queue(interaction.guild.id)
+    queue_list = queue.get_queue_list()
+
+    if not queue_list:
+        await interaction.response.send_message("📭 Queue is empty! Nothing to shuffle.", ephemeral=True)
+        return
+
+    if len(queue_list) == 1:
+        await interaction.response.send_message("📭 Only one song in queue! Nothing to shuffle.", ephemeral=True)
+        return
+
+    # Shuffle the queue
+    queue.shuffle()
+    await interaction.response.send_message(f"🔀 Shuffled {len(queue_list)} songs in the queue!")
 
 
 @bot.tree.command(name="move", description="Move a song in the queue")
