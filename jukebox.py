@@ -24,6 +24,8 @@ PLAYLIST_LIMIT = int(
     os.getenv("PLAYLIST_LIMIT", "50")
 )  # Default to 10, -1 means no limit
 
+MAX_PLAYBACK_ERRORS = 3  # Max playback errors before stopping
+
 # Discord bot setup - Slash commands only
 intents = discord.Intents.default()
 # intents.message_content = True
@@ -97,6 +99,7 @@ class MusicQueue:
         self.current = None
         self.is_playing = False
         self.volume = 0.5  # Default volume (50%)
+        self.consecutive_errors = 0  # Track consecutive playback errors
 
     def add(self, song_data, position="end"):
         """Add a song to the queue
@@ -135,6 +138,18 @@ class MusicQueue:
     def get_volume(self):
         """Get current volume (0.0 to 1.0)"""
         return self.volume
+
+    def reset_error_count(self):
+        """Reset consecutive error count (called on successful playback)"""
+        self.consecutive_errors = 0
+
+    def increment_error_count(self):
+        """Increment consecutive error count"""
+        self.consecutive_errors += 1
+
+    def get_error_count(self):
+        """Get current consecutive error count"""
+        return self.consecutive_errors
 
 
 # Dictionary to store music queues for each guild
@@ -403,6 +418,9 @@ async def cmd_playnow(interaction: discord.Interaction, query: str):
         ):
             interaction.guild.voice_client.stop()
 
+        # Reset error count when manually starting playback
+        queue.reset_error_count()
+        
         # Set as current and play immediately
         queue.current = song_info
         queue.is_playing = True
@@ -410,8 +428,12 @@ async def cmd_playnow(interaction: discord.Interaction, query: str):
         player = await YTDLSource.from_url(song_info["url"], interaction.guild.id, loop=bot.loop, stream=True)
 
         def after_playing(error):
+            queue = get_queue(interaction.guild.id)
             if error:
                 logging.error(f"Player error: {error}")
+                queue.increment_error_count()
+            else:
+                queue.reset_error_count()
 
             # Use a mock context for compatibility with existing play_next function
             class MockCtx:
@@ -465,6 +487,8 @@ async def play_next(interaction):
         await interaction.followup.send("📭 Queue is empty!")
         return
 
+    # Reset error count when manually starting playback
+    queue.reset_error_count()
     queue.is_playing = True
     song_info = queue.get_next()
     queue.current = song_info
@@ -473,8 +497,12 @@ async def play_next(interaction):
         player = await YTDLSource.from_url(song_info["url"], interaction.guild.id, loop=bot.loop, stream=True)
 
         def after_playing(error):
+            queue = get_queue(interaction.guild.id)
             if error:
                 logging.error(f"Player error: {error}")
+                queue.increment_error_count()
+            else:
+                queue.reset_error_count()
 
             # Use the simplified auto-play function
             asyncio.run_coroutine_threadsafe(
@@ -864,6 +892,20 @@ async def play_next_auto(guild_id, channel):
     """Automatically play next song after current one finishes"""
     queue = get_queue(guild_id)
 
+    # Check if we've hit the maximum consecutive errors
+    if queue.get_error_count() >= MAX_PLAYBACK_ERRORS:
+        queue.is_playing = False
+        queue.reset_error_count()
+        if channel:
+            embed = discord.Embed(
+                title="❌ Playback Stopped",
+                description=f"Stopped after {MAX_PLAYBACK_ERRORS} consecutive playback errors. Use `/play` to try again.",
+                color=0xFF0000
+            )
+            await channel.send(embed=embed)
+        logging.warning(f"Stopped playback in guild {guild_id} after {MAX_PLAYBACK_ERRORS} consecutive errors")
+        return
+
     if not queue.queue:
         queue.is_playing = False
         return
@@ -881,8 +923,12 @@ async def play_next_auto(guild_id, channel):
         player = await YTDLSource.from_url(song_info["url"], guild_id, loop=bot.loop, stream=True)
 
         def after_playing(error):
+            queue = get_queue(guild_id)
             if error:
                 logging.error(f"Player error: {error}")
+                queue.increment_error_count()
+            else:
+                queue.reset_error_count()
 
             # Schedule the next song
             asyncio.run_coroutine_threadsafe(
@@ -909,6 +955,7 @@ async def play_next_auto(guild_id, channel):
 
     except Exception as e:
         logging.error(f"Error in auto play next: {e}")
+        queue.increment_error_count()
         queue.is_playing = False
         await play_next_auto(guild_id, channel)
 
