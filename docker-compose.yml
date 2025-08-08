@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  jukebox:
+    image: ghcr.io/4piu/discord-jukebox:latest
+    container_name: discord-jukebox
+    restart: unless-stopped
+    environment:
+      - TOKEN=${DISCORD_TOKEN}
+      - PLAYLIST_LIMIT=${PLAYLIST_LIMIT:-50}
+    volumes:
+      # Optional: Mount a directory for temporary audio files if needed
+      - ./temp:/tmp
+    # Uncomment the following lines if you need to expose any ports
+    # ports:
+    #   - "8080:8080"
+    
+    # Resource limits (adjust as needed)
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+        reservations:
+          memory: 256M
+          cpus: '0.25'
+
+# If you want to use a .env file for environment variables
+# Create a .env file in the same directory with:
+# DISCORD_TOKEN=your_discord_bot_token_here
+# PLAYLIST_LIMIT=50

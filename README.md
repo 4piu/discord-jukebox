@@ -63,9 +63,13 @@ The bot supports any source that yt-dlp can handle, including:
 ## Permissions Required
 
 Your bot needs the following Discord permissions:
+
+__OAuth2__:
+- bot
+
+__Bot__:
 - Connect
 - Speak
-- Use Voice Activity
 - Send Messages
 - Read Message History
 
@@ -74,4 +78,88 @@ Your bot needs the following Discord permissions:
 - The bot will automatically join your voice channel when you use the `/play` command
 - Configurable plylist item limit (default 50)
 - The bot requires ffmpeg to be installed on the system
-- Songs are streamed in real-time, not downloaded
+
+# Docker Deployment Guide
+
+## Container Registry
+
+The Discord Jukebox bot is automatically built and published to GitHub Container Registry (GHCR) when releases are created.
+
+**Image URL:** `ghcr.io/4piu/discord-jukebox`
+
+## Quick Start with Docker
+
+### Option 1: Docker Run
+```bash
+docker run -d \
+  --name discord-jukebox \
+  --restart unless-stopped \
+  -e TOKEN=your_discord_bot_token_here \
+  -e PLAYLIST_LIMIT=50 \
+  ghcr.io/4piu/discord-jukebox:latest
+```
+
+### Option 2: Docker Compose
+1. Copy the `docker-compose.yml` file to your deployment directory
+2. Create a `.env` file with your configuration:
+   ```env
+   DISCORD_TOKEN=your_discord_bot_token_here
+   PLAYLIST_LIMIT=50
+   ```
+3. Start the container:
+   ```bash
+   docker compose up -d
+   ```
+
+## Environment Variables
+
+| Variable | Description | Default | Required |
+|----------|-------------|---------|----------|
+| `TOKEN` | Discord bot token | - | Yes |
+| `PLAYLIST_LIMIT` | Maximum songs in playlist (-1 for unlimited) | 50 | No |
+
+## Container Features
+
+- **Multi-platform**: Built for both `linux/amd64` and `linux/arm64`
+- **Security**: Runs as non-root user (uid: 1001)
+- **Dependencies**: Includes FFmpeg for audio processing
+- **Health checks**: Built-in container health monitoring
+- **Resource efficient**: Optimized image size with slim Python base
+
+## Updating
+
+To update to the latest version:
+
+```bash
+# Using docker compose
+docker compose pull
+docker compose up -d
+
+# Using docker run
+docker stop discord-jukebox
+docker rm discord-jukebox
+docker pull ghcr.io/4piu/discord-jukebox:latest
+# Then run the docker run command again
+```
+
+## Monitoring
+
+Check container status:
+```bash
+docker ps
+docker logs discord-jukebox
+```
+
+## Troubleshooting
+
+### Common Issues
+
+1. **Bot not connecting**: Verify your Discord token is correct
+2. **Audio not playing**: Ensure the bot has proper voice channel permissions
+3. **Container exits**: Check logs with `docker logs discord-jukebox`
+
+### Getting Shell Access
+```bash
+docker exec -it discord-jukebox /bin/bash
+```
+
