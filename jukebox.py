@@ -542,6 +542,21 @@ async def play_next(interaction):
 
     except Exception as e:
         logging.error(f"Error playing song: {e}", exc_info=True)
+        queue.increment_error_count()
+        
+        # Check if we've hit the maximum consecutive errors
+        if queue.get_error_count() >= MAX_PLAYBACK_ERRORS:
+            queue.is_playing = False
+            queue.reset_error_count()
+            embed = discord.Embed(
+                title="❌ Playback Stopped",
+                description=f"Stopped after {MAX_PLAYBACK_ERRORS} consecutive playback errors. Use `/play` to try again.",
+                color=0xFF0000
+            )
+            await interaction.followup.send(embed=embed)
+            logging.warning(f"Stopped playback in guild {interaction.guild.id} after {MAX_PLAYBACK_ERRORS} consecutive errors")
+            return
+        
         await interaction.followup.send(f"❌ Error playing song: {str(e)}")
         queue.is_playing = False
         await play_next(interaction)
@@ -971,6 +986,20 @@ async def play_next_auto(guild_id, channel):
         logging.error(f"Error in auto play next: {e}")
         queue.increment_error_count()
         queue.is_playing = False
+        
+        # Check if we've hit the maximum consecutive errors before trying again
+        if queue.get_error_count() >= MAX_PLAYBACK_ERRORS:
+            queue.reset_error_count()
+            if channel:
+                embed = discord.Embed(
+                    title="❌ Playback Stopped",
+                    description=f"Stopped after {MAX_PLAYBACK_ERRORS} consecutive playback errors. Use `/play` to try again.",
+                    color=0xFF0000
+                )
+                await channel.send(embed=embed)
+            logging.warning(f"Stopped playback in guild {guild_id} after {MAX_PLAYBACK_ERRORS} consecutive errors")
+            return
+        
         await play_next_auto(guild_id, channel)
 
 
