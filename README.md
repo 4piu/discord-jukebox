@@ -2,6 +2,8 @@
 
 A Discord music bot.
 
+100% vibe coding, 0% effort. 
+
 ## Features
 
 - **Modern Slash Commands** - All commands use Discord's `/` syntax with auto-complete
@@ -37,6 +39,7 @@ All commands use Discord's modern slash command system (`/`):
 - `/queue` - Show current queue with position numbers
 - `/move <from> <to>` - Move songs between positions
 - `/remove <position>` - Remove song from specific position
+- `/shuffle` - Randomly shuffle the current queue
 - `/clear` - Clear entire queue
 
 ### 🔧 **Bot Control**
