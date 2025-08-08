@@ -9,7 +9,8 @@ license = {text = "MIT"}
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-    "discord.py[voice]>=2.6",
+    # TODO: switch to 2.6 when released: https://github.com/Rapptz/discord.py/issues/10207
+    "discord.py[voice] @git+https://github.com/rapptz/discord.py",
     "yt-dlp>=2025.7.21",
     "python-dotenv>=1.1.1",
 ]
