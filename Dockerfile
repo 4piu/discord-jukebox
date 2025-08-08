@@ -1,11 +1,11 @@
 # Build stage - Generate requirements.txt from Poetry
-FROM python:3.13-slim as builder
+FROM python:3.13-slim AS builder
 
 # Set working directory
 WORKDIR /app
 
-# Install poetry
-RUN pip install poetry
+# Install poetry and the export plugin
+RUN pip install poetry poetry-plugin-export
 
 # Copy poetry files
 COPY pyproject.toml poetry.lock* ./
