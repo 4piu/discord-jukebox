@@ -3,15 +3,16 @@ name: Build and Publish Docker Image
 on:
   release:
     types: [published]
-  push:
-    branches:
-      - main
   workflow_dispatch:
     inputs:
-      tag:
-        description: 'Tag to build and push'
+      ref:
+        description: 'Git ref (branch or tag) to build'
         required: true
-        default: 'latest'
+        default: 'main'
+      image_tags:
+        description: 'Comma-separated image tags to publish'
+        required: false
+        default: 'git'
 
 env:
   REGISTRY: ghcr.io
@@ -27,6 +28,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -38,34 +41,61 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Prepare manual tags
+        if: github.event_name == 'workflow_dispatch'
+        id: manual-tags
+        shell: bash
+        run: |
+          TAGS_INPUT='${{ inputs.image_tags }}'
+          if [ -z "$TAGS_INPUT" ]; then
+            TAGS_INPUT='latest'
+          fi
+          echo "tags<<'EOF'" >> "$GITHUB_OUTPUT"
+          IFS=',' read -ra TAGS <<< "$TAGS_INPUT"
+          for TAG in "${TAGS[@]}"; do
+            CLEAN_TAG=$(echo "$TAG" | xargs)
+            if [ -n "$CLEAN_TAG" ]; then
+              echo "type=raw,value=${CLEAN_TAG}" >> "$GITHUB_OUTPUT"
+            fi
+          done
+          echo 'EOF' >> "$GITHUB_OUTPUT"
+
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          flavor: |
+            latest=false
           tags: |
-            type=ref,event=branch,enable={{is_default_branch}}
-            type=ref,event=pr
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
+            ${{ steps.manual-tags.outputs.tags }}
+            type=raw,value=${{ github.event.release.tag_name }},enable=${{ github.event_name == 'release' }}
             type=raw,value=latest,enable=${{ github.event_name == 'release' }}
-            type=raw,value=git
 
       - name: Build and push Docker image
+        id: build-push
         uses: docker/build-push-action@v5
         with:
           context: .
           platforms: linux/amd64,linux/arm64
-          push: true
+          push: ${{ github.event_name == 'release' || github.event_name == 'workflow_dispatch' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
       - name: Generate deployment artifact
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || '' }}
+          MANUAL_TAGS: ${{ github.event_name == 'workflow_dispatch' && inputs.image_tags || '' }}
         run: |
-          echo "Image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}" > deployment-info.txt
+          if [ "$EVENT_NAME" = 'release' ]; then
+            IMAGE_TAGS="${RELEASE_TAG},latest"
+          else
+            IMAGE_TAGS="$MANUAL_TAGS"
+          fi
+          echo "Image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${IMAGE_TAGS}" > deployment-info.txt
           echo "Digest: ${{ steps.build-push.outputs.digest }}" >> deployment-info.txt
 
       - name: Upload deployment artifact
