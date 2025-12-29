@@ -1,5 +1,5 @@
 # Build stage - Generate requirements.txt from Poetry
-FROM python:3.13-slim AS builder
+FROM python:3.14-slim AS builder
 
 # Set working directory
 WORKDIR /app
@@ -15,7 +15,7 @@ RUN poetry config virtualenvs.create false && \
     poetry export -f requirements.txt --output requirements.txt --without-hashes
 
 # Production stage
-FROM python:3.13-slim
+FROM python:3.14-slim
 
 # Set working directory
 WORKDIR /app
