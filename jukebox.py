@@ -75,7 +75,7 @@ if COOKIES_FILE:
 ffmpeg_options = {
     "before_options": "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5",
     "options": "-vn",
-    "executable": "/usr/bin/ffmpeg",  # Explicitly specify FFmpeg path
+    "executable": "ffmpeg",
 }
 
 ytdl = yt_dlp.YoutubeDL(ytdl_format_options)  # For fast metadata extraction
