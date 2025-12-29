@@ -31,6 +31,19 @@ jobs:
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref }}
 
+      - name: Validate release tag
+        if: github.event_name == 'release'
+        id: release-tag
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9._-]+)?$ ]]; then
+            echo "Release tag $TAG is not in vX.Y.Z or vX.Y.Z-suffix format."
+            exit 1
+          fi
+          CLEAN_TAG="${TAG#v}"
+          echo "sanitized_tag=$CLEAN_TAG" >> "$GITHUB_OUTPUT"
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -70,6 +83,7 @@ jobs:
           tags: |
             ${{ steps.manual-tags.outputs.tags }}
             type=raw,value=${{ github.event.release.tag_name }},enable=${{ github.event_name == 'release' }}
+            type=raw,value=${{ steps.release-tag.outputs.sanitized_tag }},enable=${{ github.event_name == 'release' }}
             type=raw,value=latest,enable=${{ github.event_name == 'release' }}
 
       - name: Build and push Docker image
@@ -88,10 +102,15 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           RELEASE_TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || '' }}
+          SANITIZED_TAG: ${{ steps.release-tag.outputs.sanitized_tag }}
           MANUAL_TAGS: ${{ github.event_name == 'workflow_dispatch' && inputs.image_tags || '' }}
         run: |
           if [ "$EVENT_NAME" = 'release' ]; then
-            IMAGE_TAGS="${RELEASE_TAG},latest"
+            if [ -n "$SANITIZED_TAG" ]; then
+              IMAGE_TAGS="${RELEASE_TAG},${SANITIZED_TAG},latest"
+            else
+              IMAGE_TAGS="${RELEASE_TAG},latest"
+            fi
           else
             IMAGE_TAGS="$MANUAL_TAGS"
           fi
