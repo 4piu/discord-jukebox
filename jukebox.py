@@ -1033,5 +1033,27 @@ async def play_next_auto(guild_id, channel):
         await play_next_auto(guild_id, channel)
 
 
+def load_opus():
+    """Load Opus library on macOS if not already loaded"""
+    if discord.opus.is_loaded():
+        return
+
+    if sys.platform.startswith("darwin"):
+        brew_lib_path = "/opt/homebrew/opt/opus/lib"
+        if os.path.isdir(brew_lib_path):
+            current = os.environ.get("DYLD_LIBRARY_PATH", "")
+            paths = current.split(os.pathsep) if current else []
+            if brew_lib_path not in paths:
+                paths.append(brew_lib_path)
+                os.environ["DYLD_LIBRARY_PATH"] = os.pathsep.join(paths)
+                logging.debug(f"DYLD_LIBRARY_PATH={os.environ['DYLD_LIBRARY_PATH']}")
+        else:
+            logging.warning(f"Expected Homebrew opus path missing: {brew_lib_path}")
+        discord.opus.load_opus("libopus.dylib")
+    else:
+        logging.info("Skip manual loading Opus library on this platform.")
+
+
 if __name__ == "__main__":
+    load_opus()
     bot.run(TOKEN)
