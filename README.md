@@ -155,6 +155,7 @@ docker run -d \
 | `TOKEN` | Discord bot token | - | Yes |
 | `PLAYLIST_LIMIT` | Maximum songs in playlist (-1 for unlimited) | 50 | No |
 | `COOKIES_FILE` | Path to cookies file for yt-dlp authentication | - | No |
+| `LOG_LEVEL` | Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL) | INFO | No |
 
 ## Container Features
 

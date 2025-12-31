@@ -12,7 +12,19 @@ import logging
 load_dotenv()
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+LOG_LEVEL_NAME = os.getenv("LOG_LEVEL", "INFO").upper()
+_LEVEL_MAP = {
+    "CRITICAL": logging.CRITICAL,
+    "ERROR": logging.ERROR,
+    "WARNING": logging.WARNING,
+    "INFO": logging.INFO,
+    "DEBUG": logging.DEBUG,
+    "NOTSET": logging.NOTSET,
+}
+LOG_LEVEL = _LEVEL_MAP.get(LOG_LEVEL_NAME, logging.INFO)
+logging.basicConfig(level=LOG_LEVEL)
+if LOG_LEVEL_NAME not in _LEVEL_MAP:
+    logging.warning("Invalid LOG_LEVEL '%s'; defaulting to INFO", LOG_LEVEL_NAME)
 
 # Bot configuration
 TOKEN = os.getenv("TOKEN")
@@ -77,6 +89,26 @@ ffmpeg_options = {
     "options": "-vn",
     "executable": "ffmpeg",
 }
+
+if LOG_LEVEL <= logging.DEBUG:
+    # Enable verbose output when debugging
+    ytdl_format_options.update(
+        {
+            "quiet": False,
+            "no_warnings": False,
+            "logtostderr": True,
+            "verbose": True,
+        }
+    )
+    ytdl_audio_options.update(
+        {
+            "quiet": False,
+            "no_warnings": False,
+            "logtostderr": True,
+            "verbose": True,
+        }
+    )
+    ffmpeg_options["before_options"] += " -loglevel verbose"
 
 ytdl = yt_dlp.YoutubeDL(ytdl_format_options)  # For fast metadata extraction
 ytdl_audio = yt_dlp.YoutubeDL(ytdl_audio_options)  # For audio URL extraction
