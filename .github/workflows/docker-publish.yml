@@ -118,7 +118,7 @@ jobs:
           echo "Digest: ${{ steps.build-push.outputs.digest }}" >> deployment-info.txt
 
       - name: Upload deployment artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: deployment-info
           path: deployment-info.txt
