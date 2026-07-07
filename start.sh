@@ -11,10 +11,10 @@ if [ ! -f ".env" ]; then
     exit 1
 fi
 
-# Check if virtual environment exists
-if [ ! -d ".venv" ]; then
-    echo "Error: Virtual environment not found!"
-    echo "Please set up the virtual environment first"
+# Check if uv is available
+if ! command -v uv &> /dev/null; then
+    echo "Error: uv not found!"
+    echo "Please install uv: https://docs.astral.sh/uv/getting-started/installation/"
     exit 1
 fi
 
@@ -30,9 +30,9 @@ if ! command -v yt-dlp &> /dev/null; then
     echo "Make sure yt-dlp is installed for video/audio downloading"
 fi
 
-# Activate virtual environment and run the bot
-echo "Activating virtual environment..."
-source .venv/bin/activate
+# Sync dependencies and run the bot
+echo "Syncing dependencies..."
+uv sync --locked
 
 echo "Starting bot..."
-python jukebox.py
+uv run python jukebox.py

@@ -1,18 +1,19 @@
-# Build stage - Generate requirements.txt from Poetry
+# Build stage - Install dependencies with uv
 FROM python:3.14-slim AS builder
+
+# Install uv
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 # Set working directory
 WORKDIR /app
 
-# Install poetry and the export plugin
-RUN pip install poetry poetry-plugin-export
+ENV UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    UV_PYTHON_DOWNLOADS=never
 
-# Copy poetry files
-COPY pyproject.toml poetry.lock* ./
-
-# Configure poetry and export requirements
-RUN poetry config virtualenvs.create false && \
-    poetry export -f requirements.txt --output requirements.txt --without-hashes
+# Copy dependency files and install into a project-local venv
+COPY pyproject.toml uv.lock ./
+RUN uv sync --locked --no-install-project
 
 # Production stage
 FROM python:3.14-slim
@@ -26,11 +27,9 @@ RUN apt-get update && apt-get install -y \
     git \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements.txt from builder stage
-COPY --from=builder /app/requirements.txt ./
-
-# Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+# Copy the virtual environment from builder stage
+COPY --from=builder /app/.venv /app/.venv
+ENV PATH="/app/.venv/bin:$PATH"
 
 # Copy the application code
 COPY jukebox.py ./
