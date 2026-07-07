@@ -35,7 +35,7 @@ if not TOKEN:
 # Playlist configuration
 PLAYLIST_LIMIT = int(
     os.getenv("PLAYLIST_LIMIT", "50")
-)  # Default to 10, -1 means no limit
+)  # Default to 50, -1 means no limit
 
 # Cookie file configuration
 COOKIES_FILE = os.getenv("COOKIES_FILE")
@@ -117,7 +117,7 @@ ytdl_audio = yt_dlp.YoutubeDL(ytdl_audio_options)  # For audio URL extraction
 
 async def get_audio_source(url):
     """Extract audio URL for streaming"""
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     try:
         data = await loop.run_in_executor(
             None, lambda: ytdl_audio.extract_info(url, download=False)
@@ -134,7 +134,7 @@ class YTDLSource(discord.PCMVolumeTransformer):
         super().__init__(source, volume)
 
     @classmethod
-    async def from_url(cls, url, guild_id, *, loop=None, stream=False):
+    async def from_url(cls, url, guild_id):
         source = await get_audio_source(url)
         queue = get_queue(guild_id)
         return cls(source, volume=queue.get_volume())
@@ -147,7 +147,9 @@ class MusicQueue:
         self.is_playing = False
         self.volume = 0.5  # Default volume (50%)
         self.consecutive_errors = 0  # Track consecutive playback errors
-        self._stop_event = asyncio.Event()  # Event to coordinate stopping/starting
+        self.generation = 0  # Bumped each time playback is (re)started; lets a
+        # stale after_playing callback from a superseded song detect that it
+        # should not advance the queue itself
 
     def add(self, song_data, position="end"):
         """Add a song to the queue
@@ -198,18 +200,6 @@ class MusicQueue:
     def get_error_count(self):
         """Get current consecutive error count"""
         return self.consecutive_errors
-
-    def signal_stop(self):
-        """Signal that playback should stop (used for manual stops)"""
-        self._stop_event.set()
-
-    def clear_stop_signal(self):
-        """Clear the stop signal"""
-        self._stop_event.clear()
-
-    def should_stop(self):
-        """Check if playback should stop"""
-        return self._stop_event.is_set()
 
 
 # Dictionary to store music queues for each guild
@@ -351,6 +341,111 @@ async def extract_playlist(query):
     return processed_entries, total_count, was_limited, False
 
 
+def format_duration(duration):
+    """Format a duration in seconds as M:SS, or 'Unknown' if not available"""
+    if not duration:
+        return "Unknown"
+    duration = int(duration)
+    return f"{duration // 60}:{duration % 60:02d}"
+
+
+def build_song_info(entry, requester):
+    """Build the song dict stored in the queue from an extracted entry"""
+    return {
+        "url": entry["url"],
+        "title": entry["title"],
+        "duration": entry["duration"],
+        "uploader": entry["uploader"],
+        "requester": requester,
+    }
+
+
+def build_now_playing_embed(song_info, *, title="🎵 Now Playing", color=0x00FF00, footer=None):
+    embed = discord.Embed(title=title, description=f"**{song_info['title']}**", color=color)
+    embed.add_field(name="Duration", value=format_duration(song_info["duration"]), inline=True)
+    embed.add_field(name="Requested by", value=song_info["requester"].mention, inline=True)
+    if footer:
+        embed.set_footer(text=footer)
+    return embed
+
+
+async def play_song(guild_id, channel, song_info):
+    """Start playing song_info right now, superseding any current playback.
+
+    Returns True if playback started, False if the audio couldn't be extracted
+    or the bot isn't connected to voice anymore.
+    """
+    queue = get_queue(guild_id)
+    guild = bot.get_guild(guild_id)
+    if not guild or not guild.voice_client:
+        return False
+
+    try:
+        player = await YTDLSource.from_url(song_info["url"], guild_id)
+    except Exception as e:
+        logging.error(f"Error extracting audio for playback: {e}", exc_info=True)
+        return False
+
+    # Bump the generation before touching the voice client so a stale
+    # after_playing callback from whatever was playing before (fired by the
+    # stop() call below) can tell it's been superseded and must not advance
+    # the queue itself.
+    queue.generation += 1
+    generation = queue.generation
+    queue.current = song_info
+    queue.is_playing = True
+
+    def after_playing(error):
+        if error:
+            logging.error(f"Player error: {error}")
+        if generation != queue.generation:
+            return  # a newer playback has already superseded this one
+        if error:
+            queue.increment_error_count()
+        else:
+            queue.reset_error_count()
+        asyncio.run_coroutine_threadsafe(advance_queue(guild_id, channel), bot.loop)
+
+    voice_client = guild.voice_client
+    if voice_client.is_playing() or voice_client.is_paused():
+        voice_client.stop()
+    voice_client.play(player, after=after_playing)
+    return True
+
+
+async def advance_queue(guild_id, channel):
+    """Play the next queued song, or stop if the queue is empty or too many
+    consecutive errors have piled up"""
+    queue = get_queue(guild_id)
+
+    if queue.get_error_count() >= MAX_PLAYBACK_ERRORS:
+        queue.is_playing = False
+        queue.reset_error_count()
+        if channel:
+            embed = discord.Embed(
+                title="❌ Playback Stopped",
+                description=f"Stopped after {MAX_PLAYBACK_ERRORS} consecutive playback errors. Use `/play` to try again.",
+                color=0xFF0000,
+            )
+            await channel.send(embed=embed)
+        logging.warning(f"Stopped playback in guild {guild_id} after {MAX_PLAYBACK_ERRORS} consecutive errors")
+        return
+
+    if not queue.queue:
+        queue.is_playing = False
+        return
+
+    song_info = queue.get_next()
+
+    if await play_song(guild_id, channel, song_info):
+        queue.reset_error_count()
+        if channel:
+            await channel.send(embed=build_now_playing_embed(song_info))
+    else:
+        queue.increment_error_count()
+        await advance_queue(guild_id, channel)
+
+
 # Sync slash commands on ready
 @bot.event
 async def on_ready():
@@ -387,29 +482,20 @@ async def cmd_play(interaction: discord.Interaction, query: str):
             return
 
         # Add all songs to queue
-        added_count = 0
         for entry in entries:
-            song_info = {
-                "url": entry["url"],
-                "title": entry["title"],
-                "duration": entry["duration"],
-                "uploader": entry["uploader"],
-                "requester": interaction.user,
-            }
-            queue.add(song_info, "end")
-            added_count += 1
+            queue.add(build_song_info(entry, interaction.user), "end")
 
         # Send response based on single vs playlist
         await interaction.followup.send(
             f"✅ Added to queue: **{entries[0]['title']}**"
             if is_single_video
-            else f"✅ Added {added_count} songs from playlist to queue"
+            else f"✅ Added {len(entries)} songs from playlist to queue"
             + (f" (limited from {total_count} total)" if was_limited else "")
         )
 
         # Start playing if not already playing
         if not queue.is_playing:
-            await play_next(interaction)
+            await advance_queue(interaction.guild.id, interaction.channel)
 
     except Exception as e:
         logging.error(f"Error in play command: {e}", exc_info=True)
@@ -442,174 +528,37 @@ async def cmd_playnow(interaction: discord.Interaction, query: str):
             return
 
         # Take first song for immediate play
-        first_entry = entries[0]
-        song_info = {
-            "url": first_entry["url"],
-            "title": first_entry["title"],
-            "duration": first_entry["duration"],
-            "uploader": first_entry["uploader"],
-            "requester": interaction.user,
-        }
+        song_info = build_song_info(entries[0], interaction.user)
 
         # Add remaining songs to front of queue (if playlist)
-        if len(entries) > 1:
-            remaining_entries = entries[1:]
-            for entry in reversed(remaining_entries):
-                playlist_song = {
-                    "url": entry["url"],
-                    "title": entry["title"],
-                    "duration": entry["duration"],
-                    "uploader": entry["uploader"],
-                    "requester": interaction.user,
-                }
-                queue.add(playlist_song, "next")
+        remaining_entries = entries[1:]
+        for entry in reversed(remaining_entries):
+            queue.add(build_song_info(entry, interaction.user), "next")
 
-            await interaction.followup.send(
-                f"🎵 Playing now: **{song_info['title']}**\n✅ Added {len(remaining_entries)} more songs from playlist to queue"
-                + (f" (limited from {total_count} total songs)" if was_limited else "")
-            )
-        else:
-            await interaction.followup.send(f"🎵 Playing now: **{song_info['title']}**")
-
-        # Stop current song if playing and wait for it to finish
-        if (
-            interaction.guild.voice_client
-            and interaction.guild.voice_client.is_playing()
-        ):
-            queue.signal_stop()  # Signal that we want to stop
-            interaction.guild.voice_client.stop()
-            # Give a moment for the stop to process
-            await asyncio.sleep(0.1)
-
-        # Reset error count when manually starting playback
+        success = await play_song(interaction.guild.id, interaction.channel, song_info)
+        if not success:
+            await interaction.followup.send(f"❌ Failed to play **{song_info['title']}**")
+            return
         queue.reset_error_count()
-        queue.clear_stop_signal()  # Clear stop signal for new song
-        
-        # Set as current and play immediately
-        queue.current = song_info
-        queue.is_playing = True
 
-        player = await YTDLSource.from_url(song_info["url"], interaction.guild.id, loop=bot.loop, stream=True)
-
-        def after_playing(error):
-            queue = get_queue(interaction.guild.id)
-            if error:
-                logging.error(f"Player error: {error}")
-                queue.increment_error_count()
-            else:
-                queue.reset_error_count()
-
-            # Use a mock context for compatibility with existing play_next function
-            class MockCtx:
-                def __init__(self, guild, voice_client, channel):
-                    self.guild = guild
-                    self.voice_client = voice_client
-                    self.channel = channel
-
-                async def send(self, content=None, embed=None):
-                    if self.channel:
-                        await self.channel.send(content=content, embed=embed)
-
-            ctx_mock = MockCtx(
-                interaction.guild, interaction.guild.voice_client, interaction.channel
-            )
-            asyncio.run_coroutine_threadsafe(
-                play_next_auto(interaction.guild.id, interaction.channel), bot.loop
-            )
-
-        interaction.guild.voice_client.play(player, after=after_playing)
-
-        duration_str = (
-            f"{int(song_info['duration'])//60}:{int(song_info['duration'])%60:02d}"
-            if song_info["duration"]
-            else "Unknown"
-        )
-        embed = discord.Embed(
-            title="🎵 Now Playing",
-            description=f"**{song_info['title']}**",
+        embed = build_now_playing_embed(
+            song_info,
             color=0xFF4500,  # Orange color to distinguish from regular play
+            footer="▶️ Playing immediately (skipped queue)",
         )
-        embed.add_field(name="Duration", value=duration_str, inline=True)
-        embed.add_field(
-            name="Requested by", value=song_info["requester"].mention, inline=True
-        )
-        embed.set_footer(text="▶️ Playing immediately (skipped queue)")
+        if remaining_entries:
+            embed.add_field(
+                name="📃 Queue Updated",
+                value=f"Added {len(remaining_entries)} more song(s) from playlist"
+                + (f" (limited from {total_count} total songs)" if was_limited else ""),
+                inline=False,
+            )
 
         await interaction.followup.send(embed=embed)
 
     except Exception as e:
         logging.error(f"Error in playnow command: {e}", exc_info=True)
         await interaction.followup.send(f"❌ An error occurred: {str(e)}")
-
-
-# Helper function for slash commands
-async def play_next(interaction):
-    queue = get_queue(interaction.guild.id)
-
-    if not queue.queue:
-        queue.is_playing = False
-        await interaction.followup.send("📭 Queue is empty!")
-        return
-
-    # Reset error count when manually starting playback
-    queue.reset_error_count()
-    queue.is_playing = True
-    song_info = queue.get_next()
-    queue.current = song_info
-
-    try:
-        player = await YTDLSource.from_url(song_info["url"], interaction.guild.id, loop=bot.loop, stream=True)
-
-        def after_playing(error):
-            queue = get_queue(interaction.guild.id)
-            if error:
-                logging.error(f"Player error: {error}")
-                queue.increment_error_count()
-            else:
-                queue.reset_error_count()
-
-            # Use the simplified auto-play function
-            asyncio.run_coroutine_threadsafe(
-                play_next_auto(interaction.guild.id, interaction.channel), bot.loop
-            )
-
-        interaction.guild.voice_client.play(player, after=after_playing)
-
-        duration_str = (
-            f"{int(song_info['duration'])//60}:{int(song_info['duration'])%60:02d}"
-            if song_info["duration"]
-            else "Unknown"
-        )
-        embed = discord.Embed(
-            title="Now Playing", description=f"**{song_info['title']}**", color=0x00FF00
-        )
-        embed.add_field(name="Duration", value=duration_str, inline=True)
-        embed.add_field(
-            name="Requested by", value=song_info["requester"].mention, inline=True
-        )
-
-        await interaction.followup.send(embed=embed)
-
-    except Exception as e:
-        logging.error(f"Error playing song: {e}", exc_info=True)
-        queue.increment_error_count()
-        
-        # Check if we've hit the maximum consecutive errors
-        if queue.get_error_count() >= MAX_PLAYBACK_ERRORS:
-            queue.is_playing = False
-            queue.reset_error_count()
-            embed = discord.Embed(
-                title="❌ Playback Stopped",
-                description=f"Stopped after {MAX_PLAYBACK_ERRORS} consecutive playback errors. Use `/play` to try again.",
-                color=0xFF0000
-            )
-            await interaction.followup.send(embed=embed)
-            logging.warning(f"Stopped playback in guild {interaction.guild.id} after {MAX_PLAYBACK_ERRORS} consecutive errors")
-            return
-        
-        await interaction.followup.send(f"❌ Error playing song: {str(e)}")
-        queue.is_playing = False
-        await play_next(interaction)
 
 
 # Add missing slash commands to complete the functionality
@@ -636,28 +585,19 @@ async def cmd_playnext(interaction: discord.Interaction, query: str):
             return
 
         # Add all songs to front of queue in reverse order so first song plays first
-        added_count = 0
         for entry in reversed(entries):
-            song_info = {
-                "url": entry["url"],
-                "title": entry["title"],
-                "duration": entry["duration"],
-                "uploader": entry["uploader"],
-                "requester": interaction.user,
-            }
-            queue.add(song_info, "next")
-            added_count += 1
+            queue.add(build_song_info(entry, interaction.user), "next")
 
         await interaction.followup.send(
             f"📃 Added to queue: **{entries[0]['title']}**"
             if is_single_video
-            else f"📃 Added {added_count} songs from playlist to queue"
+            else f"📃 Added {len(entries)} songs from playlist to queue"
             + (f" (limited from {total_count} total)" if was_limited else "")
         )
 
         # Start playing if not already playing
         if not queue.is_playing:
-            await play_next(interaction)
+            await advance_queue(interaction.guild.id, interaction.channel)
 
     except Exception as e:
         logging.error(f"Error in playnext command: {e}", exc_info=True)
@@ -688,11 +628,7 @@ async def cmd_queue(interaction: discord.Interaction):
     if queue_list:
         queue_text = ""
         for i, song in enumerate(queue_list[:10], 1):  # Show first 10 songs
-            duration_str = (
-                f"({int(song['duration'])//60}:{int(song['duration'])%60:02d})"
-                if song["duration"]
-                else ""
-            )
+            duration_str = f"({format_duration(song['duration'])})" if song["duration"] else ""
             queue_text += f"**{i}.** **{song['title']}** {duration_str}\n   Requested by {song['requester'].mention}\n\n"
 
         embed.add_field(name="📃 Up Next", value=queue_text[:1024], inline=False)
@@ -713,8 +649,6 @@ async def cmd_skip(interaction: discord.Interaction):
         return
 
     if interaction.guild.voice_client and interaction.guild.voice_client.is_playing():
-        queue = get_queue(interaction.guild.id)
-        queue.signal_stop()  # Signal stop but let auto-play continue normally
         interaction.guild.voice_client.stop()
         await interaction.response.send_message("⏭️ Skipped!")
     else:
@@ -774,7 +708,6 @@ async def cmd_stop(interaction: discord.Interaction):
         queue = get_queue(interaction.guild.id)
         queue.clear()
         queue.is_playing = False
-        queue.signal_stop()  # Signal complete stop
         interaction.guild.voice_client.stop()
         await interaction.response.send_message("⏹️ Stopped playing and cleared queue!")
     else:
@@ -846,19 +779,7 @@ async def cmd_nowplaying(interaction: discord.Interaction):
         await interaction.response.send_message("❌ Nothing is playing!", ephemeral=True)
         return
 
-    song = queue.current
-    duration_str = (
-        f"{int(song['duration'])//60}:{int(song['duration'])%60:02d}"
-        if song["duration"]
-        else "Unknown"
-    )
-
-    embed = discord.Embed(
-        title="🎵 Now Playing", description=f"**{song['title']}**", color=0x00FF00
-    )
-    embed.add_field(name="Duration", value=duration_str, inline=True)
-    embed.add_field(name="Requested by", value=song["requester"].mention, inline=True)
-
+    embed = build_now_playing_embed(queue.current)
     await interaction.response.send_message(embed=embed)
 
 
@@ -967,103 +888,6 @@ async def cmd_remove(interaction: discord.Interaction, position: int):
     await interaction.response.send_message(
         f"❌ Removed **{removed_song['title']}** from position {position}"
     )
-
-
-# Simplified play_next function for slash commands only
-async def play_next_auto(guild_id, channel):
-    """Automatically play next song after current one finishes"""
-    queue = get_queue(guild_id)
-
-    # Check if this was a manual stop (playnow, stop command)
-    if queue.should_stop():
-        # For /stop command, keep the stop signal to prevent further auto-play
-        # For /skip or /playnow, they will clear the signal when ready
-        if not queue.queue or not queue.is_playing:
-            # This was a complete stop, don't continue
-            return
-        # Otherwise clear the signal and continue (this was a skip)
-        queue.clear_stop_signal()
-
-    # Check if we've hit the maximum consecutive errors
-    if queue.get_error_count() >= MAX_PLAYBACK_ERRORS:
-        queue.is_playing = False
-        queue.reset_error_count()
-        if channel:
-            embed = discord.Embed(
-                title="❌ Playback Stopped",
-                description=f"Stopped after {MAX_PLAYBACK_ERRORS} consecutive playback errors. Use `/play` to try again.",
-                color=0xFF0000
-            )
-            await channel.send(embed=embed)
-        logging.warning(f"Stopped playback in guild {guild_id} after {MAX_PLAYBACK_ERRORS} consecutive errors")
-        return
-
-    if not queue.queue:
-        queue.is_playing = False
-        return
-
-    queue.is_playing = True
-    song_info = queue.get_next()
-    queue.current = song_info
-
-    try:
-        # Get voice client from guild
-        guild = bot.get_guild(guild_id)
-        if not guild or not guild.voice_client:
-            return
-
-        player = await YTDLSource.from_url(song_info["url"], guild_id, loop=bot.loop, stream=True)
-
-        def after_playing(error):
-            queue = get_queue(guild_id)
-            if error:
-                logging.error(f"Player error: {error}")
-                queue.increment_error_count()
-            else:
-                queue.reset_error_count()
-
-            # Schedule the next song
-            asyncio.run_coroutine_threadsafe(
-                play_next_auto(guild_id, channel), bot.loop
-            )
-
-        guild.voice_client.play(player, after=after_playing)
-
-        duration_str = (
-            f"{int(song_info['duration'])//60}:{int(song_info['duration'])%60:02d}"
-            if song_info["duration"]
-            else "Unknown"
-        )
-        embed = discord.Embed(
-            title="Now Playing", description=f"**{song_info['title']}**", color=0x00FF00
-        )
-        embed.add_field(name="Duration", value=duration_str, inline=True)
-        embed.add_field(
-            name="Requested by", value=song_info["requester"].mention, inline=True
-        )
-
-        if channel:
-            await channel.send(embed=embed)
-
-    except Exception as e:
-        logging.error(f"Error in auto play next: {e}")
-        queue.increment_error_count()
-        queue.is_playing = False
-        
-        # Check if we've hit the maximum consecutive errors before trying again
-        if queue.get_error_count() >= MAX_PLAYBACK_ERRORS:
-            queue.reset_error_count()
-            if channel:
-                embed = discord.Embed(
-                    title="❌ Playback Stopped",
-                    description=f"Stopped after {MAX_PLAYBACK_ERRORS} consecutive playback errors. Use `/play` to try again.",
-                    color=0xFF0000
-                )
-                await channel.send(embed=embed)
-            logging.warning(f"Stopped playback in guild {guild_id} after {MAX_PLAYBACK_ERRORS} consecutive errors")
-            return
-        
-        await play_next_auto(guild_id, channel)
 
 
 def load_opus():
