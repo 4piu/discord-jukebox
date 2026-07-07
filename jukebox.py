@@ -480,7 +480,7 @@ async def on_ready():
         logging.error(f"Failed to sync commands: {e}")
 
 
-@bot.tree.command(name="play", description="Play a song from URL or search term")
+@bot.tree.command(name="play", description="Add a song to the end of the queue")
 async def cmd_play(interaction: discord.Interaction, query: str):
     # Check guild first, then voice connection
     if not await ensure_guild(interaction):
@@ -525,7 +525,7 @@ async def cmd_play(interaction: discord.Interaction, query: str):
 
 @bot.tree.command(
     name="playnow",
-    description="Skip current song and play the specified song immediately",
+    description="Skip the current song and play this one immediately",
 )
 async def cmd_playnow(interaction: discord.Interaction, query: str):
     # Check guild first, then voice connection
@@ -583,7 +583,7 @@ async def cmd_playnow(interaction: discord.Interaction, query: str):
 
 
 # Add missing slash commands to complete the functionality
-@bot.tree.command(name="playnext", description="Add a song to play next in the queue")
+@bot.tree.command(name="playnext", description="Add a song to the front of the queue")
 async def cmd_playnext(interaction: discord.Interaction, query: str):
     # Check guild first, then voice connection
     if not await ensure_guild(interaction):
@@ -625,7 +625,7 @@ async def cmd_playnext(interaction: discord.Interaction, query: str):
         await interaction.followup.send(f"❌ An error occurred: {str(e)}")
 
 
-@bot.tree.command(name="queue", description="Show the current music queue")
+@bot.tree.command(name="queue", description="Show the current queue")
 async def cmd_queue(interaction: discord.Interaction):
     if not await ensure_guild(interaction):
         return
@@ -720,7 +720,7 @@ async def cmd_leave(interaction: discord.Interaction):
         )
 
 
-@bot.tree.command(name="stop", description="Stop playing and clear the queue")
+@bot.tree.command(name="stop", description="Stop playback and clear the queue")
 async def cmd_stop(interaction: discord.Interaction):
     if not await ensure_guild(interaction):
         return
@@ -759,7 +759,7 @@ async def cmd_resume(interaction: discord.Interaction):
         await interaction.response.send_message("❌ Nothing is paused!", ephemeral=True)
 
 
-@bot.tree.command(name="volume", description="Change the volume (0-100)")
+@bot.tree.command(name="volume", description="Set the volume (0-100)")
 async def cmd_volume(interaction: discord.Interaction, volume: int):
     if not await ensure_guild(interaction):
         return
@@ -806,7 +806,7 @@ async def cmd_nowplaying(interaction: discord.Interaction):
 
 @bot.tree.command(
     name="notifications",
-    description="Control the automatic now-playing announcements for this server",
+    description="Control automatic now-playing announcements",
 )
 @app_commands.choices(
     mode=[
@@ -824,7 +824,7 @@ async def cmd_notifications(interaction: discord.Interaction, mode: app_commands
     await interaction.response.send_message(f"🔔 Notifications set to **{mode.name}**", ephemeral=True)
 
 
-@bot.tree.command(name="clear", description="Clear the entire queue")
+@bot.tree.command(name="clear", description="Clear the queue")
 async def cmd_clear(interaction: discord.Interaction):
     if not await ensure_guild(interaction):
         return
@@ -834,7 +834,7 @@ async def cmd_clear(interaction: discord.Interaction):
     await interaction.response.send_message("🗑️ Queue cleared!")
 
 
-@bot.tree.command(name="shuffle", description="Shuffle the current queue")
+@bot.tree.command(name="shuffle", description="Shuffle the queue")
 async def cmd_shuffle(interaction: discord.Interaction):
     if not await ensure_guild(interaction):
         return
@@ -855,7 +855,7 @@ async def cmd_shuffle(interaction: discord.Interaction):
     await interaction.response.send_message(f"🔀 Shuffled {len(queue_list)} songs in the queue!")
 
 
-@bot.tree.command(name="move", description="Move a song in the queue")
+@bot.tree.command(name="move", description="Move a song to a different position in the queue")
 async def cmd_move(
     interaction: discord.Interaction, from_position: int, to_position: int
 ):
