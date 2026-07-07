@@ -128,6 +128,12 @@ def new_audio_extractor():
     return yt_dlp.YoutubeDL(dict(ytdl_audio_options))
 
 
+def new_search_extractor():
+    """Build a fresh YoutubeDL that fully resolves a search query (no flat
+    extraction), used to follow the redirect a plain search term produces"""
+    return yt_dlp.YoutubeDL(dict(ytdl_format_options, extract_flat=False))
+
+
 async def get_audio_source(url):
     """Extract audio URL for streaming"""
     loop = asyncio.get_running_loop()
@@ -322,6 +328,26 @@ async def extract_playlist(query):
     data = await loop.run_in_executor(
         None, lambda: new_metadata_extractor().extract_info(query, download=False)
     )
+
+    # A plain search term (not a URL/playlist) doesn't get extracted here -
+    # flat extraction doesn't follow redirects, so it comes back as a shallow
+    # pointer to e.g. "ytsearch:query" instead of real metadata. Resolve it
+    # with one more, fully-resolving extraction; it's always a single result.
+    if data.get("_type") == "url":
+        search_result = await loop.run_in_executor(
+            None, lambda: new_search_extractor().extract_info(data["url"], download=False)
+        )
+        entry = search_result["entries"][0] if "entries" in search_result else search_result
+        single_entry = {
+            "title": entry.get("title", "Unknown"),
+            "duration": entry.get("duration", 0),
+            "uploader": entry.get("uploader", "Unknown"),
+            "id": entry.get("id"),
+            # Use webpage_url, not the (possibly expiring, format-specific)
+            # resolved stream url - it gets re-resolved fresh at play time.
+            "url": entry.get("webpage_url"),
+        }
+        return [single_entry], 1, False, True
 
     if "entries" not in data:
         # Single video - convert to standard format (early return)
