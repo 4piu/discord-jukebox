@@ -111,8 +111,21 @@ if LOG_LEVEL <= logging.DEBUG:
     )
     ffmpeg_options["before_options"] += " -loglevel verbose"
 
-ytdl = yt_dlp.YoutubeDL(ytdl_format_options)  # For fast metadata extraction
-ytdl_audio = yt_dlp.YoutubeDL(ytdl_audio_options)  # For audio URL extraction
+
+def new_metadata_extractor():
+    """Build a fresh YoutubeDL for fast/flat metadata extraction.
+
+    A new instance (with its own copy of the options dict) is built per call
+    rather than sharing one globally: YoutubeDL mutates its params dict and
+    caches per-instance extractor state on construction, which isn't safe to
+    share across the concurrent worker threads extraction runs on.
+    """
+    return yt_dlp.YoutubeDL(dict(ytdl_format_options))
+
+
+def new_audio_extractor():
+    """Build a fresh YoutubeDL for resolving a playable audio URL"""
+    return yt_dlp.YoutubeDL(dict(ytdl_audio_options))
 
 
 async def get_audio_source(url):
@@ -120,7 +133,7 @@ async def get_audio_source(url):
     loop = asyncio.get_running_loop()
     try:
         data = await loop.run_in_executor(
-            None, lambda: ytdl_audio.extract_info(url, download=False)
+            None, lambda: new_audio_extractor().extract_info(url, download=False)
         )
         if "entries" in data:
             data = data["entries"][0]
@@ -302,11 +315,11 @@ async def extract_playlist(query):
     Returns:
         tuple: (playlist_entries, total_count, was_limited, is_single_video)
     """
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
 
     # For URLs, use flat extraction
     data = await loop.run_in_executor(
-        None, lambda: ytdl.extract_info(query, download=False)
+        None, lambda: new_metadata_extractor().extract_info(query, download=False)
     )
 
     if "entries" not in data:
