@@ -163,6 +163,7 @@ class MusicQueue:
         self.generation = 0  # Bumped each time playback is (re)started; lets a
         # stale after_playing callback from a superseded song detect that it
         # should not advance the queue itself
+        self.notify_mode = "mute"  # "on", "mute", or "off" - auto-advance announcements
 
     def add(self, song_data, position="end"):
         """Add a song to the queue
@@ -426,6 +427,15 @@ async def play_song(guild_id, channel, song_info):
     return True
 
 
+async def send_notification(channel, queue, *, embed):
+    """Send an automatic (not user-command-triggered) playback announcement,
+    honoring the guild's notify_mode: 'on' sends normally, 'mute' sends
+    without pinging anyone, 'off' skips it entirely."""
+    if not channel or queue.notify_mode == "off":
+        return
+    await channel.send(embed=embed, silent=(queue.notify_mode == "mute"))
+
+
 async def advance_queue(guild_id, channel):
     """Play the next queued song, or stop if the queue is empty or too many
     consecutive errors have piled up"""
@@ -434,13 +444,12 @@ async def advance_queue(guild_id, channel):
     if queue.get_error_count() >= MAX_PLAYBACK_ERRORS:
         queue.is_playing = False
         queue.reset_error_count()
-        if channel:
-            embed = discord.Embed(
-                title="❌ Playback Stopped",
-                description=f"Stopped after {MAX_PLAYBACK_ERRORS} consecutive playback errors. Use `/play` to try again.",
-                color=0xFF0000,
-            )
-            await channel.send(embed=embed)
+        embed = discord.Embed(
+            title="❌ Playback Stopped",
+            description=f"Stopped after {MAX_PLAYBACK_ERRORS} consecutive playback errors. Use `/play` to try again.",
+            color=0xFF0000,
+        )
+        await send_notification(channel, queue, embed=embed)
         logging.warning(f"Stopped playback in guild {guild_id} after {MAX_PLAYBACK_ERRORS} consecutive errors")
         return
 
@@ -452,8 +461,7 @@ async def advance_queue(guild_id, channel):
 
     if await play_song(guild_id, channel, song_info):
         queue.reset_error_count()
-        if channel:
-            await channel.send(embed=build_now_playing_embed(song_info))
+        await send_notification(channel, queue, embed=build_now_playing_embed(song_info))
     else:
         queue.increment_error_count()
         await advance_queue(guild_id, channel)
@@ -794,6 +802,26 @@ async def cmd_nowplaying(interaction: discord.Interaction):
 
     embed = build_now_playing_embed(queue.current)
     await interaction.response.send_message(embed=embed)
+
+
+@bot.tree.command(
+    name="notifications",
+    description="Control the automatic now-playing announcements for this server",
+)
+@app_commands.choices(
+    mode=[
+        app_commands.Choice(name="On - announce every song normally", value="on"),
+        app_commands.Choice(name="Mute - announce, but without pinging anyone", value="mute"),
+        app_commands.Choice(name="Off - don't announce automatically", value="off"),
+    ]
+)
+async def cmd_notifications(interaction: discord.Interaction, mode: app_commands.Choice[str]):
+    if not await ensure_guild(interaction):
+        return
+
+    queue = get_queue(interaction.guild.id)
+    queue.notify_mode = mode.value
+    await interaction.response.send_message(f"🔔 Notifications set to **{mode.name}**", ephemeral=True)
 
 
 @bot.tree.command(name="clear", description="Clear the entire queue")

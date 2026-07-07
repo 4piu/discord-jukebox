@@ -47,6 +47,7 @@ All commands use Discord's modern slash command system (`/`):
 - `/leave` - Leave voice channel
 - `/volume <0-100>` - Set playback volume
 - `/nowplaying` - Show current song info
+- `/notifications <on|mute|off>` - Control automatic now-playing announcements (default: mute)
 
 ## Queue Priority System
 
