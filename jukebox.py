@@ -963,17 +963,21 @@ def load_opus():
         return
 
     if sys.platform.startswith("darwin"):
-        brew_lib_path = "/opt/homebrew/opt/opus/lib"
-        if os.path.isdir(brew_lib_path):
-            current = os.environ.get("DYLD_LIBRARY_PATH", "")
-            paths = current.split(os.pathsep) if current else []
-            if brew_lib_path not in paths:
-                paths.append(brew_lib_path)
-                os.environ["DYLD_LIBRARY_PATH"] = os.pathsep.join(paths)
-                logging.debug(f"DYLD_LIBRARY_PATH={os.environ['DYLD_LIBRARY_PATH']}")
-        else:
-            logging.warning(f"Expected Homebrew opus path missing: {brew_lib_path}")
-        discord.opus.load_opus("libopus.dylib")
+        # Homebrew's lib dir isn't on the default dylib search path, and setting
+        # DYLD_LIBRARY_PATH from within the already-running process doesn't
+        # retroactively affect ctypes' dlopen calls in this process - so resolve
+        # the actual file and load it by absolute path instead.
+        candidates = [
+            "/opt/homebrew/opt/opus/lib/libopus.dylib",  # Apple Silicon Homebrew
+            "/usr/local/opt/opus/lib/libopus.dylib",  # Intel Homebrew
+        ]
+        for path in candidates:
+            if os.path.exists(path):
+                discord.opus.load_opus(path)
+                return
+        logging.error(
+            f"libopus not found (checked {candidates}). Install it with `brew install opus`."
+        )
     else:
         logging.info("Skip manual loading Opus library on this platform.")
 

@@ -30,6 +30,14 @@ if ! command -v yt-dlp &> /dev/null; then
     echo "Make sure yt-dlp is installed for video/audio downloading"
 fi
 
+# Check if Opus is available (required for voice playback on macOS)
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    if [ ! -f "/opt/homebrew/opt/opus/lib/libopus.dylib" ] && [ ! -f "/usr/local/opt/opus/lib/libopus.dylib" ]; then
+        echo "Warning: Opus library not found"
+        echo "Install it with: brew install opus"
+    fi
+fi
+
 # Sync dependencies and run the bot
 echo "Syncing dependencies..."
 uv sync --locked
