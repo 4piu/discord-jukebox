@@ -95,6 +95,7 @@ __Bot__:
 - The bot will automatically join your voice channel when you use the `/play` command
 - Configurable plylist item limit (default 50)
 - The bot requires ffmpeg to be installed on the system
+- The bot requires the Opus codec library (libopus) to be installed on the host for voice playback
 
 # Docker Deployment Guide
 
@@ -196,6 +197,7 @@ docker logs discord-jukebox
 
 1. **Bot not connecting**: Verify your Discord token is correct
 2. **Audio not playing**: Ensure the bot has proper voice channel permissions
+3. **Opus not loaded**: Install libopus on the host (macOS: `brew install opus`, Linux: `apt install libopus0`, Windows: place `opus.dll` and set `DISCORD_OPUS_LIBRARY`)
 3. **Container exits**: Check logs with `docker logs discord-jukebox`
 
 ### Getting Shell Access
