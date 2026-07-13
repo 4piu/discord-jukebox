@@ -50,7 +50,7 @@ jobs:
       # doesn't chain workflow runs off the default token, to prevent
       # infinite loops) - run that workflow manually afterwards.
       - name: Create release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.tag.outputs.tag }}
           target_commitish: ${{ inputs.target }}
