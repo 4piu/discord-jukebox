@@ -168,6 +168,8 @@ docker run -d \
 | `NO_COLOR` | Set to any non-empty value to disable colored log output (colors are on by default in a TTY or Docker) | - | No |
 | `EPHEMERAL_REPLIES` | Command receipts are shown only to the invoker to keep the channel quiet; set to `false` for public replies. Channel-wide announcements are controlled with `/notifications` | true | No |
 | `CONTROL_BUTTONS` | Playback control buttons (⏮️ ⏯️ ⏭️ / 🔁 🔂 ↪️) on now-playing cards; set to `false` for plain cards | true | No |
+| `AUDIO_BUFFER_SECONDS` | PCM audio retained ahead of Discord playback to absorb short media/network stalls; `0` disables it | 3 | No |
+| `AUDIO_BUFFER_STARTUP_SECONDS` | PCM to collect before playback begins; capped by `AUDIO_BUFFER_SECONDS` | 1 | No |
 
 ## Container Features
 
@@ -214,4 +216,3 @@ docker logs discord-jukebox
 ```bash
 docker exec -it discord-jukebox /bin/bash
 ```
-

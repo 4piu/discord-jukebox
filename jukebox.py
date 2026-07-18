@@ -1,8 +1,10 @@
 import asyncio
+import queue as thread_queue
 import re
 import shlex
 import signal
 import sys
+import threading
 from urllib.parse import urlsplit
 import discord
 from discord.ext import commands
@@ -84,6 +86,30 @@ def env_flag(name, default):
     return os.getenv(name, default).strip().lower() not in ("0", "false", "no", "off")
 
 
+def env_nonnegative_float(name, default):
+    """Read a non-negative float environment variable, with a safe fallback."""
+    raw_value = os.getenv(name, str(default))
+    try:
+        value = float(raw_value)
+    except ValueError:
+        logging.warning("Invalid %s '%s'; defaulting to %s", name, raw_value, default)
+        return default
+    if value < 0:
+        logging.warning("Invalid %s '%s'; defaulting to %s", name, raw_value, default)
+        return default
+    return value
+
+
+# Optional PCM read-ahead buffer. It absorbs brief input stalls (for example,
+# a reconnecting CDN socket) before Discord's 20 ms voice sender underruns.
+# Defaults provide a small, bounded cushion while adding one second of track
+# start latency. Set AUDIO_BUFFER_SECONDS=0 to disable it explicitly.
+AUDIO_BUFFER_SECONDS = env_nonnegative_float("AUDIO_BUFFER_SECONDS", 3)
+AUDIO_BUFFER_STARTUP_SECONDS = env_nonnegative_float(
+    "AUDIO_BUFFER_STARTUP_SECONDS", 1
+)
+
+
 # Command receipts ("✅ Added to queue", "⏭️ Skipped!", ...) are shown only to
 # the invoker (ephemeral) to keep the channel quiet; the channel-wide signal is
 # the auto-announcement system governed by /notifications. Set to false to get
@@ -163,7 +189,10 @@ if COOKIES_FILE:
     ytdl_audio_options["cookiefile"] = COOKIES_FILE
 
 ffmpeg_options = {
-    "before_options": "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5",
+    "before_options": (
+        "-reconnect 1 -reconnect_streamed 1 "
+        "-reconnect_on_network_error 1 -reconnect_delay_max 5"
+    ),
     "options": "-vn",
     "executable": "ffmpeg",
 }
@@ -285,6 +314,76 @@ class TimestampedFFmpegPCMAudio(discord.FFmpegPCMAudio):
         dest.flush()
 
 
+class BufferedPCMAudio(discord.AudioSource):
+    """Read PCM from an FFmpeg source ahead of Discord's voice send loop."""
+
+    FRAME_BYTES = 3840  # 20 ms of 48 kHz, stereo, signed 16-bit PCM
+    FRAME_SECONDS = 0.02
+
+    def __init__(self, source, buffer_seconds, startup_seconds):
+        self.source = source
+        self._stop = threading.Event()
+        self._eof = threading.Event()
+        self._ready = threading.Event()
+        self._underrun = False
+        max_frames = max(1, int(buffer_seconds / self.FRAME_SECONDS))
+        self._startup_frames = min(
+            max_frames, int(startup_seconds / self.FRAME_SECONDS + 0.999999)
+        )
+        self._frames = thread_queue.Queue(maxsize=max_frames)
+        self._reader = threading.Thread(
+            target=self._read_ahead,
+            daemon=True,
+            name="jukebox-pcm-read-ahead",
+        )
+        self._reader.start()
+
+    def _read_ahead(self):
+        try:
+            while not self._stop.is_set():
+                frame = self.source.read()
+                if not frame:
+                    break
+                while not self._stop.is_set():
+                    try:
+                        self._frames.put(frame, timeout=0.1)
+                        break
+                    except thread_queue.Full:
+                        pass
+                if self._frames.qsize() >= self._startup_frames:
+                    self._ready.set()
+        except Exception:
+            logging.exception("PCM read-ahead buffer stopped unexpectedly")
+        finally:
+            self._eof.set()
+            self._ready.set()
+
+    def read(self):
+        try:
+            # AudioPlayer keeps its own 20 ms clock and catches up if read()
+            # blocks. Never wait here: an empty buffer must yield silence, not
+            # make Discord send subsequent frames in a burst.
+            frame = self._frames.get_nowait()
+        except thread_queue.Empty:
+            if self._eof.is_set():
+                return b""
+            if not self._underrun:
+                logging.warning("PCM read-ahead buffer underrun; sending silence")
+                self._underrun = True
+            return b"\0" * self.FRAME_BYTES
+        if self._underrun:
+            logging.info("PCM read-ahead buffer recovered")
+            self._underrun = False
+        return frame
+
+    def wait_until_ready(self):
+        """Block only before VoiceClient.play starts its 20 ms clock."""
+        self._ready.wait()
+
+    def cleanup(self):
+        self._stop.set()
+        self.source.cleanup()
+
 
 async def get_audio_source(url):
     """Extract audio URL for streaming"""
@@ -315,6 +414,12 @@ class YTDLSource(discord.PCMVolumeTransformer):
     @classmethod
     async def from_url(cls, url, guild_id):
         source = await get_audio_source(url)
+        if AUDIO_BUFFER_SECONDS > 0:
+            source = BufferedPCMAudio(
+                source, AUDIO_BUFFER_SECONDS, AUDIO_BUFFER_STARTUP_SECONDS
+            )
+            if AUDIO_BUFFER_STARTUP_SECONDS > 0:
+                await asyncio.to_thread(source.wait_until_ready)
         queue = get_queue(guild_id)
         return cls(source, volume=queue.get_volume())
 

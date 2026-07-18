@@ -16,6 +16,8 @@ services:
       - NO_COLOR=${NO_COLOR:-}
       - EPHEMERAL_REPLIES=${EPHEMERAL_REPLIES:-true}
       - CONTROL_BUTTONS=${CONTROL_BUTTONS:-true}
+      - AUDIO_BUFFER_SECONDS=${AUDIO_BUFFER_SECONDS:-3}
+      - AUDIO_BUFFER_STARTUP_SECONDS=${AUDIO_BUFFER_STARTUP_SECONDS:-1}
     volumes:
       # Optional: Mount a directory for temporary audio files if needed
       - ./temp:/tmp
