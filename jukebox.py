@@ -76,16 +76,20 @@ HISTORY_LIMIT = int(os.getenv("HISTORY_LIMIT", "50"))
 if HISTORY_LIMIT < 0:
     HISTORY_LIMIT = None  # deque(maxlen=None) = unbounded
 
+def env_flag(name, default):
+    """Boolean env var: '0', 'false', 'no', 'off' (any case) mean off"""
+    return os.getenv(name, default).strip().lower() not in ("0", "false", "no", "off")
+
+
 # Command receipts ("✅ Added to queue", "⏭️ Skipped!", ...) are shown only to
 # the invoker (ephemeral) to keep the channel quiet; the channel-wide signal is
 # the auto-announcement system governed by /notifications. Set to false to get
 # the old public replies back.
-EPHEMERAL_REPLIES = os.getenv("EPHEMERAL_REPLIES", "true").strip().lower() not in (
-    "0",
-    "false",
-    "no",
-    "off",
-)
+EPHEMERAL_REPLIES = env_flag("EPHEMERAL_REPLIES", "true")
+
+# Playback control buttons (⏮️⏯️⏭️ / 🔁🔂↪️) on now-playing cards; set to
+# false to send plain cards without buttons.
+CONTROL_BUTTONS = env_flag("CONTROL_BUTTONS", "true")
 
 # Discord bot setup - Slash commands only
 intents = discord.Intents.default()
@@ -104,6 +108,9 @@ class JukeboxBot(commands.Bot):
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGINT, signal.SIGTERM):
             loop.add_signal_handler(sig, self._on_shutdown_signal)
+        # Route presses of the playback-control buttons (fixed custom_ids) to
+        # a fresh view, including buttons on cards sent before a restart.
+        self.add_view(JukeboxControls())
 
     def _on_shutdown_signal(self):
         if self._shutdown_requested:
@@ -542,13 +549,15 @@ async def play_song(guild_id, channel, song_info):
     return True
 
 
-async def send_notification(channel, queue, *, embed):
+async def send_notification(channel, queue, *, embed, view=None):
     """Send an automatic (not user-command-triggered) playback announcement,
     honoring the guild's notify_mode: 'on' sends normally, 'mute' sends
     without pinging anyone, 'off' skips it entirely."""
     if not channel or queue.notify_mode == "off":
         return
-    await channel.send(embed=embed, silent=(queue.notify_mode == "mute"))
+    # view is falsy when absent (None or discord.utils.MISSING)
+    kwargs = {"view": view} if view else {}
+    await channel.send(embed=embed, silent=(queue.notify_mode == "mute"), **kwargs)
 
 
 async def advance_queue(guild_id, channel, finished=None, errored=False):
@@ -603,7 +612,7 @@ async def advance_queue(guild_id, channel, finished=None, errored=False):
             label=f"🎵 Now Playing{loop_suffix(queue)}",
             up_next=queue.queue[0]["title"] if queue.queue else None,
         )
-        await send_notification(channel, queue, embed=embed)
+        await send_notification(channel, queue, embed=embed, view=controls_view())
     else:
         queue.increment_error_count()
         await advance_queue(guild_id, channel)
@@ -822,7 +831,7 @@ async def cmd_playnow(interaction: discord.Interaction, query: str):
                 inline=False,
             )
 
-        await interaction.followup.send(embed=embed)
+        await interaction.followup.send(embed=embed, view=controls_view())
 
     except Exception as e:
         logging.error(f"Error in playnow command: {e}", exc_info=True)
@@ -916,11 +925,8 @@ async def cmd_queue(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed, ephemeral=EPHEMERAL_REPLIES)
 
 
-@bot.tree.command(name="skip", description="Skip the current song")
-async def cmd_skip(interaction: discord.Interaction):
-    if not await ensure_guild(interaction):
-        return
-
+async def skip_impl(interaction: discord.Interaction):
+    """Skip the current song - shared by /skip and the ⏭️ button"""
     if interaction.guild.voice_client and interaction.guild.voice_client.is_playing():
         queue = get_queue(interaction.guild.id)
         # Under loop_mode "song", advance_queue would otherwise replay the
@@ -933,11 +939,85 @@ async def cmd_skip(interaction: discord.Interaction):
         await interaction.response.send_message("❌ Nothing is playing!", ephemeral=True)
 
 
-@bot.tree.command(name="previous", description="Go back and play the previously played song")
-async def cmd_previous(interaction: discord.Interaction):
+async def playpause_impl(interaction: discord.Interaction):
+    """Toggle pause/resume - the ⏯️ button"""
+    voice_client = interaction.guild.voice_client
+    if voice_client and voice_client.is_playing():
+        voice_client.pause()
+        await interaction.response.send_message("⏸️ Paused!", ephemeral=EPHEMERAL_REPLIES)
+    elif voice_client and voice_client.is_paused():
+        voice_client.resume()
+        await interaction.response.send_message("▶️ Resumed!", ephemeral=EPHEMERAL_REPLIES)
+    else:
+        await interaction.response.send_message("❌ Nothing is playing!", ephemeral=True)
+
+
+async def set_loop_impl(interaction: discord.Interaction, mode, label):
+    """Set the loop mode - shared by /loop and the loop-mode buttons"""
+    queue = get_queue(interaction.guild.id)
+    queue.loop_mode = mode
+    await interaction.response.send_message(
+        f"Loop mode set to **{label}**", ephemeral=EPHEMERAL_REPLIES
+    )
+
+
+class JukeboxControls(discord.ui.View):
+    """Playback control buttons attached to now-playing cards.
+
+    Stateless and persistent: each button acts on whatever is playing NOW in
+    the guild (exactly like its slash-command counterpart), so buttons on old
+    cards never go stale; the fixed custom_ids plus the add_view() call in
+    setup_hook keep them working even on cards sent before a restart."""
+
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(emoji="⏮️", custom_id="jukebox:previous", style=discord.ButtonStyle.secondary, row=0)
+    async def on_previous(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if await ensure_guild(interaction):
+            await previous_impl(interaction)
+
+    @discord.ui.button(emoji="⏯️", custom_id="jukebox:playpause", style=discord.ButtonStyle.secondary, row=0)
+    async def on_playpause(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if await ensure_guild(interaction):
+            await playpause_impl(interaction)
+
+    @discord.ui.button(emoji="⏭️", custom_id="jukebox:skip", style=discord.ButtonStyle.secondary, row=0)
+    async def on_skip(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if await ensure_guild(interaction):
+            await skip_impl(interaction)
+
+    @discord.ui.button(emoji="🔁", custom_id="jukebox:loop_queue", style=discord.ButtonStyle.secondary, row=1)
+    async def on_loop_queue(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if await ensure_guild(interaction):
+            await set_loop_impl(interaction, "queue", "🔁 Loop queue")
+
+    @discord.ui.button(emoji="🔂", custom_id="jukebox:loop_song", style=discord.ButtonStyle.secondary, row=1)
+    async def on_loop_song(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if await ensure_guild(interaction):
+            await set_loop_impl(interaction, "song", "🔂 Loop current song")
+
+    @discord.ui.button(emoji="↪️", custom_id="jukebox:loop_off", style=discord.ButtonStyle.secondary, row=1)
+    async def on_loop_off(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if await ensure_guild(interaction):
+            await set_loop_impl(interaction, "off", "↪️ No loop")
+
+
+def controls_view():
+    """Playback buttons for a now-playing card, or MISSING (the send APIs'
+    view-parameter default, meaning no components) when CONTROL_BUTTONS is off"""
+    return JukeboxControls() if CONTROL_BUTTONS else discord.utils.MISSING
+
+
+@bot.tree.command(name="skip", description="Skip the current song")
+async def cmd_skip(interaction: discord.Interaction):
     if not await ensure_guild(interaction):
         return
+    await skip_impl(interaction)
 
+
+async def previous_impl(interaction: discord.Interaction):
+    """Play the previously played song - shared by /previous and the ⏮️ button"""
     queue = get_queue(interaction.guild.id)
 
     if not interaction.guild.voice_client:
@@ -990,6 +1070,13 @@ async def cmd_previous(interaction: discord.Interaction):
         await interaction.followup.send(f"⏮️ Playing previous: **{target['title']}**")
     else:
         await interaction.followup.send(f"❌ Failed to play **{target['title']}**")
+
+
+@bot.tree.command(name="previous", description="Go back and play the previously played song")
+async def cmd_previous(interaction: discord.Interaction):
+    if not await ensure_guild(interaction):
+        return
+    await previous_impl(interaction)
 
 
 @bot.tree.command(name="join", description="Join your voice channel")
@@ -1143,7 +1230,9 @@ async def cmd_nowplaying(interaction: discord.Interaction):
         label=f"🎵 Now Playing{loop_suffix(queue)}",
         up_next=queue.queue[0]["title"] if queue.queue else None,
     )
-    await interaction.response.send_message(embed=embed, ephemeral=EPHEMERAL_REPLIES)
+    await interaction.response.send_message(
+        embed=embed, ephemeral=EPHEMERAL_REPLIES, view=controls_view()
+    )
 
 
 @bot.tree.command(
@@ -1178,11 +1267,7 @@ async def cmd_loop(interaction: discord.Interaction, mode: app_commands.Choice[s
     if not await ensure_guild(interaction):
         return
 
-    queue = get_queue(interaction.guild.id)
-    queue.loop_mode = mode.value
-    await interaction.response.send_message(
-        f"Loop mode set to **{mode.name}**", ephemeral=EPHEMERAL_REPLIES
-    )
+    await set_loop_impl(interaction, mode.value, mode.name)
 
 
 @bot.tree.command(name="history", description="Show songs played this session")

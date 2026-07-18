@@ -15,6 +15,7 @@ services:
       - MAX_PLAYBACK_ERRORS=${MAX_PLAYBACK_ERRORS:-3}
       - NO_COLOR=${NO_COLOR:-}
       - EPHEMERAL_REPLIES=${EPHEMERAL_REPLIES:-true}
+      - CONTROL_BUTTONS=${CONTROL_BUTTONS:-true}
     volumes:
       # Optional: Mount a directory for temporary audio files if needed
       - ./temp:/tmp

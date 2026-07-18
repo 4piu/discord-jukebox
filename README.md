@@ -7,6 +7,7 @@ A Discord music bot.
 ## Features
 
 - **Modern Slash Commands** - All commands use Discord's `/` syntax with auto-complete
+- **Control Buttons** - Every now-playing card carries playback buttons (⏮️ ⏯️ ⏭️ / 🔁 🔂 ↪️), so no typing needed for the common actions
 - Play music from YouTube, SoundCloud, and other supported platforms
 - Advanced queue system with flexible positioning
 - Playlist support
@@ -166,6 +167,7 @@ docker run -d \
 | `MAX_PLAYBACK_ERRORS` | Consecutive playback errors before the bot stops trying | 3 | No |
 | `NO_COLOR` | Set to any non-empty value to disable colored log output (colors are on by default in a TTY or Docker) | - | No |
 | `EPHEMERAL_REPLIES` | Command receipts are shown only to the invoker to keep the channel quiet; set to `false` for public replies. Channel-wide announcements are controlled with `/notifications` | true | No |
+| `CONTROL_BUTTONS` | Playback control buttons (⏮️ ⏯️ ⏭️ / 🔁 🔂 ↪️) on now-playing cards; set to `false` for plain cards | true | No |
 
 ## Container Features
 
