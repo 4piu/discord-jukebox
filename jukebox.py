@@ -24,10 +24,20 @@ _LEVEL_MAP = {
     "NOTSET": logging.NOTSET,
 }
 LOG_LEVEL = _LEVEL_MAP.get(LOG_LEVEL_NAME, logging.INFO)
-logging.basicConfig(
-    level=LOG_LEVEL,
-    format="%(asctime)s %(levelname)-8s %(name)s %(message)s",
-)
+# Colourised output when the stream supports it (TTY, or Docker where `docker
+# logs` is normally viewed on one); plain text otherwise. NO_COLOR forces
+# plain output, e.g. when shipping container logs to a file/collector.
+if os.environ.get("NO_COLOR"):
+    discord.utils.setup_logging(
+        level=LOG_LEVEL,
+        formatter=logging.Formatter(
+            "[{asctime}] [{levelname:<8}] {name}: {message}",
+            "%Y-%m-%d %H:%M:%S",
+            style="{",
+        ),
+    )
+else:
+    discord.utils.setup_logging(level=LOG_LEVEL)
 if LOG_LEVEL_NAME not in _LEVEL_MAP:
     logging.warning("Invalid LOG_LEVEL '%s'; defaulting to INFO", LOG_LEVEL_NAME)
 
