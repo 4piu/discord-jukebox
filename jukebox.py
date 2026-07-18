@@ -1,7 +1,9 @@
 import asyncio
 import re
+import shlex
 import signal
 import sys
+from urllib.parse import urlsplit
 import discord
 from discord.ext import commands
 from discord import app_commands
@@ -25,6 +27,7 @@ _LEVEL_MAP = {
     "NOTSET": logging.NOTSET,
 }
 LOG_LEVEL = _LEVEL_MAP.get(LOG_LEVEL_NAME, logging.INFO)
+ffmpeg_logger = logging.getLogger("jukebox.ffmpeg")
 # Colourised output when the stream supports it (TTY, or Docker where `docker
 # logs` is normally viewed on one); plain text otherwise. NO_COLOR forces
 # plain output, e.g. when shipping container logs to a file/collector.
@@ -208,6 +211,81 @@ def new_search_extractor():
     return yt_dlp.YoutubeDL(dict(ytdl_format_options, extract_flat=False))
 
 
+def ffmpeg_before_options(http_headers):
+    """Return FFmpeg input options, including yt-dlp's media request headers.
+
+    Extractors commonly provide a User-Agent and other headers needed for the
+    resolved CDN URL.  FFmpeg otherwise sends its own default User-Agent,
+    which can result in more frequent upstream connection resets.  Validate
+    header names and strip line breaks from values so extractor data cannot
+    add command-line options or additional HTTP header lines unexpectedly.
+    """
+    before_options = ffmpeg_options["before_options"]
+    header_lines = []
+    for name, value in (http_headers or {}).items():
+        name = str(name)
+        if not re.fullmatch(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+", name):
+            continue
+        value = str(value).replace("\r", "").replace("\n", "")
+        header_lines.append(f"{name}: {value}")
+
+    if header_lines:
+        # FFmpeg expects one argument containing CRLF-separated HTTP headers.
+        before_options += " -headers " + shlex.quote("\r\n".join(header_lines) + "\r\n")
+    return before_options
+
+
+class FFmpegStderrLogger:
+    """File-like sink that gives FFmpeg stderr lines normal application logs.
+
+    discord.py recognises a file-like object without ``fileno()`` and pipes
+    FFmpeg's stderr to its ``write`` method in a reader thread.  That avoids
+    FFmpeg writing directly to the container's stdout/stderr without the
+    logging formatter (and therefore without timestamps).
+    """
+
+    def __init__(self, media_host):
+        self.media_host = media_host
+        self._pending = ""
+
+    def write(self, data):
+        text = data.decode("utf-8", errors="replace") if isinstance(data, bytes) else str(data)
+        self._pending += text
+        lines = self._pending.splitlines(keepends=True)
+        self._pending = ""
+        for line in lines:
+            if line.endswith(("\n", "\r")):
+                ffmpeg_logger.warning("[%s] %s", self.media_host, line.rstrip())
+            else:
+                self._pending = line
+        return len(data)
+
+    def flush(self):
+        if self._pending:
+            ffmpeg_logger.warning("[%s] %s", self.media_host, self._pending)
+            self._pending = ""
+
+
+class TimestampedFFmpegPCMAudio(discord.FFmpegPCMAudio):
+    """Read FFmpeg stderr per line rather than discord.py's 8 KiB chunks."""
+
+    def _pipe_reader(self, dest):
+        while self._process:
+            if self._stderr is None:
+                break
+            try:
+                line = self._stderr.readline()
+            except Exception:
+                ffmpeg_logger.exception("Unable to read FFmpeg stderr")
+                dest.flush()
+                return
+            if not line:
+                break
+            dest.write(line)
+        dest.flush()
+
+
+
 async def get_audio_source(url):
     """Extract audio URL for streaming"""
     loop = asyncio.get_running_loop()
@@ -217,7 +295,15 @@ async def get_audio_source(url):
         )
         if "entries" in data:
             data = data["entries"][0]
-        return discord.FFmpegPCMAudio(data["url"], **ffmpeg_options)
+        source_options = dict(ffmpeg_options)
+        source_options["before_options"] = ffmpeg_before_options(
+            data.get("http_headers")
+        )
+        media_host = urlsplit(data["url"]).hostname or "unknown-media-host"
+        ffmpeg_logger.info("Starting FFmpeg media stream from %s", media_host)
+        return TimestampedFFmpegPCMAudio(
+            data["url"], stderr=FFmpegStderrLogger(media_host), **source_options
+        )
     except Exception as e:
         raise Exception(f"Error extracting audio from URL: {e}")
 
