@@ -1,4 +1,5 @@
 import asyncio
+import re
 import signal
 import sys
 import discord
@@ -546,6 +547,94 @@ async def on_ready():
         logging.info(f"Synced {len(synced)} command(s)")
     except Exception as e:
         logging.error(f"Failed to sync commands: {e}")
+
+
+INVITE_RE = re.compile(
+    r"(?:https?://)?(?:www\.)?(?:discord\.gg|discord(?:app)?\.com/invite)/([A-Za-z0-9-]+)",
+    re.IGNORECASE,
+)
+
+
+@bot.event
+async def on_message(message: discord.Message):
+    """Join a voice channel by DM'd invite link (e.g. Discord's
+    "Invite to Channel" UI, which delivers the invite as a DM).
+
+    Overriding on_message disables prefix-command processing, which this
+    slash-commands-only bot doesn't use.
+    """
+    if message.author.bot or message.guild is not None:
+        return
+
+    match = INVITE_RE.search(message.content)
+    if not match:
+        await message.channel.send(
+            "👋 Send me a voice channel invite link and I'll join it. "
+            "Music playback is controlled with slash commands in the server."
+        )
+        return
+
+    try:
+        invite = await bot.fetch_invite(match.group(1))
+    except discord.NotFound:
+        await message.channel.send("❌ That invite is invalid or has expired.")
+        return
+    except discord.HTTPException as e:
+        logging.error(f"Failed to resolve invite: {e}")
+        await message.channel.send("❌ Couldn't resolve that invite, please try again later.")
+        return
+
+    # Resolve the partial invite channel against the bot's own cache; a miss
+    # means the bot isn't in that guild.
+    channel = bot.get_channel(invite.channel.id) if invite.channel else None
+    if channel is None:
+        await message.channel.send(
+            "❌ I'm not a member of that server, so I can't join its channels."
+        )
+        return
+    if not isinstance(channel, discord.VoiceChannel):
+        await message.channel.send("❌ That invite doesn't point to a voice channel.")
+        return
+
+    # Only follow invitations from someone who is in the channel themselves -
+    # otherwise anyone could summon the bot into arbitrary channels.
+    if not any(m.id == message.author.id for m in channel.members):
+        await message.channel.send(
+            f"❌ You need to be in **{channel.name}** yourself before inviting me."
+        )
+        return
+
+    perms = channel.permissions_for(channel.guild.me)
+    if not (perms.connect and perms.speak):
+        await message.channel.send(
+            f"❌ I don't have permission to connect and speak in **{channel.name}**."
+        )
+        return
+
+    voice_client = channel.guild.voice_client
+    if voice_client:
+        if voice_client.channel and voice_client.channel.id == channel.id:
+            await message.channel.send(f"✅ I'm already in **{channel.name}**!")
+        elif voice_client.is_playing() or voice_client.is_paused():
+            await message.channel.send(
+                f"❌ I'm busy playing music in **{voice_client.channel.name}** right now."
+            )
+        else:
+            await voice_client.move_to(channel)
+            await message.channel.send(f"✅ Moved to **{channel.name}**!")
+        return
+
+    try:
+        await channel.connect()
+    except Exception as e:
+        logging.error(f"Failed to join {channel} via invite: {e}", exc_info=True)
+        await message.channel.send(f"❌ Failed to join **{channel.name}**: {e}")
+        return
+
+    logging.info(f"Joined voice channel {channel} via DM invite from {message.author}")
+    await message.channel.send(
+        f"✅ Joined **{channel.name}**! Use `/play` in the server to queue music."
+    )
 
 
 @bot.tree.command(name="play", description="Add a song to the end of the queue")
