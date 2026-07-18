@@ -675,6 +675,17 @@ def loop_suffix(queue):
     return {"song": " 🔂", "queue": " 🔁"}.get(queue.loop_mode, "")
 
 
+# Short confirmation labels, distinct from the longer descriptive text shown
+# in each command's dropdown (app_commands.Choice.name) - a confirmation
+# reply shouldn't echo back the whole picker description.
+LOOP_MODE_LABELS = {
+    "queue": "🔁 Loop queue",
+    "song": "🔂 Loop current song",
+    "off": "↪️ No loop",
+}
+NOTIFY_MODE_LABELS = {"on": "On", "mute": "Muted", "off": "Off"}
+
+
 def build_now_playing_embed(song_info, *, label="🎵 Now Playing", color=0x00FF00, footer=None, up_next=None):
     """Compact now-playing card: small label on top, the song title as a
     clickable link to the source, one detail line, and an optional footer
@@ -1143,12 +1154,12 @@ async def playpause_impl(interaction: discord.Interaction):
         await interaction.response.send_message("❌ Nothing is playing!", ephemeral=True)
 
 
-async def set_loop_impl(interaction: discord.Interaction, mode, label):
+async def set_loop_impl(interaction: discord.Interaction, mode):
     """Set the loop mode - shared by /loop and the loop-mode buttons"""
     queue = get_queue(interaction.guild.id)
     queue.loop_mode = mode
     await interaction.response.send_message(
-        f"Loop mode set to **{label}**", ephemeral=EPHEMERAL_REPLIES
+        f"Loop mode set to **{LOOP_MODE_LABELS[mode]}**", ephemeral=EPHEMERAL_REPLIES
     )
 
 
@@ -1181,17 +1192,17 @@ class JukeboxControls(discord.ui.View):
     @discord.ui.button(emoji="🔁", custom_id="jukebox:loop_queue", style=discord.ButtonStyle.secondary, row=1)
     async def on_loop_queue(self, interaction: discord.Interaction, button: discord.ui.Button):
         if await ensure_guild(interaction):
-            await set_loop_impl(interaction, "queue", "🔁 Loop queue")
+            await set_loop_impl(interaction, "queue")
 
     @discord.ui.button(emoji="🔂", custom_id="jukebox:loop_song", style=discord.ButtonStyle.secondary, row=1)
     async def on_loop_song(self, interaction: discord.Interaction, button: discord.ui.Button):
         if await ensure_guild(interaction):
-            await set_loop_impl(interaction, "song", "🔂 Loop current song")
+            await set_loop_impl(interaction, "song")
 
     @discord.ui.button(emoji="↪️", custom_id="jukebox:loop_off", style=discord.ButtonStyle.secondary, row=1)
     async def on_loop_off(self, interaction: discord.Interaction, button: discord.ui.Button):
         if await ensure_guild(interaction):
-            await set_loop_impl(interaction, "off", "↪️ No loop")
+            await set_loop_impl(interaction, "off")
 
 
 def controls_view():
@@ -1430,11 +1441,14 @@ async def cmd_nowplaying(interaction: discord.Interaction):
     name="notifications",
     description="Control automatic now-playing announcements",
 )
+@app_commands.describe(
+    mode="on=every song, mute=no pinging, off=no announcements"
+)
 @app_commands.choices(
     mode=[
-        app_commands.Choice(name="On - announce every song normally", value="on"),
-        app_commands.Choice(name="Mute - announce, but without pinging anyone", value="mute"),
-        app_commands.Choice(name="Off - don't announce automatically", value="off"),
+        app_commands.Choice(name="on", value="on"),
+        app_commands.Choice(name="mute", value="mute"),
+        app_commands.Choice(name="off", value="off"),
     ]
 )
 async def cmd_notifications(interaction: discord.Interaction, mode: app_commands.Choice[str]):
@@ -1443,22 +1457,27 @@ async def cmd_notifications(interaction: discord.Interaction, mode: app_commands
 
     queue = get_queue(interaction.guild.id)
     queue.notify_mode = mode.value
-    await interaction.response.send_message(f"🔔 Notifications set to **{mode.name}**", ephemeral=True)
+    await interaction.response.send_message(
+        f"🔔 Notifications set to **{NOTIFY_MODE_LABELS[mode.value]}**", ephemeral=True
+    )
 
 
 @bot.tree.command(name="loop", description="Set the loop mode")
+@app_commands.describe(
+    mode="queue=repeat queue, song=repeat one song, off=play each song once"
+)
 @app_commands.choices(
     mode=[
-        app_commands.Choice(name="🔁 Queue - repeat all songs in the queue (default)", value="queue"),
-        app_commands.Choice(name="🔂 Song - repeat the current song", value="song"),
-        app_commands.Choice(name="Off - play each song once", value="off"),
+        app_commands.Choice(name="queue", value="queue"),
+        app_commands.Choice(name="song", value="song"),
+        app_commands.Choice(name="off", value="off"),
     ]
 )
 async def cmd_loop(interaction: discord.Interaction, mode: app_commands.Choice[str]):
     if not await ensure_guild(interaction):
         return
 
-    await set_loop_impl(interaction, mode.value, mode.name)
+    await set_loop_impl(interaction, mode.value)
 
 
 @bot.tree.command(name="history", description="Show songs played this session")
