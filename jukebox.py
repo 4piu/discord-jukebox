@@ -23,7 +23,10 @@ _LEVEL_MAP = {
     "NOTSET": logging.NOTSET,
 }
 LOG_LEVEL = _LEVEL_MAP.get(LOG_LEVEL_NAME, logging.INFO)
-logging.basicConfig(level=LOG_LEVEL)
+logging.basicConfig(
+    level=LOG_LEVEL,
+    format="%(asctime)s %(levelname)-8s %(name)s %(message)s",
+)
 if LOG_LEVEL_NAME not in _LEVEL_MAP:
     logging.warning("Invalid LOG_LEVEL '%s'; defaulting to INFO", LOG_LEVEL_NAME)
 
@@ -984,4 +987,6 @@ def load_opus():
 
 if __name__ == "__main__":
     load_opus()
-    bot.run(TOKEN)
+    # log_handler=None: logging is already configured via basicConfig above;
+    # discord.py would otherwise install a second handler and double-print.
+    bot.run(TOKEN, log_handler=None)
