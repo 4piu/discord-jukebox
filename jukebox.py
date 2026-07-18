@@ -472,12 +472,26 @@ def build_song_info(entry, requester):
     }
 
 
-def build_now_playing_embed(song_info, *, title="🎵 Now Playing", color=0x00FF00, footer=None):
-    embed = discord.Embed(title=title, description=f"**{song_info['title']}**", color=color)
-    embed.add_field(name="Duration", value=format_duration(song_info["duration"]), inline=True)
-    embed.add_field(name="Requested by", value=song_info["requester"].mention, inline=True)
-    if footer:
-        embed.set_footer(text=footer)
+def loop_suffix(queue):
+    """Loop-mode emoji for card labels, with a leading space ('' when off)"""
+    return {"song": " 🔂", "queue": " 🔁"}.get(queue.loop_mode, "")
+
+
+def build_now_playing_embed(song_info, *, label="🎵 Now Playing", color=0x00FF00, footer=None, up_next=None):
+    """Compact now-playing card: small label on top, the song title as a
+    clickable link to the source, one detail line, and an optional footer
+    ('Up next' has to live there as plain text - footers can't hold links)."""
+    embed = discord.Embed(title=song_info["title"], url=song_info.get("url"), color=color)
+    embed.set_author(name=label)
+    details = []
+    if song_info["duration"]:
+        details.append(format_duration(song_info["duration"]))
+    details.append(f"requested by {song_info['requester'].mention}")
+    embed.description = " · ".join(details)
+    footer_parts = [footer, f"Up next: {up_next}" if up_next else None]
+    footer_text = " · ".join(p for p in footer_parts if p)
+    if footer_text:
+        embed.set_footer(text=footer_text)
     return embed
 
 
@@ -584,7 +598,12 @@ async def advance_queue(guild_id, channel, finished=None, errored=False):
 
     if await play_song(guild_id, channel, song_info):
         queue.reset_error_count()
-        await send_notification(channel, queue, embed=build_now_playing_embed(song_info))
+        embed = build_now_playing_embed(
+            song_info,
+            label=f"🎵 Now Playing{loop_suffix(queue)}",
+            up_next=queue.queue[0]["title"] if queue.queue else None,
+        )
+        await send_notification(channel, queue, embed=embed)
     else:
         queue.increment_error_count()
         await advance_queue(guild_id, channel)
@@ -793,6 +812,7 @@ async def cmd_playnow(interaction: discord.Interaction, query: str):
             song_info,
             color=0xFF4500,  # Orange color to distinguish from regular play
             footer="▶️ Playing immediately (skipped queue)",
+            up_next=queue.queue[0]["title"] if queue.queue else None,
         )
         if remaining_entries:
             embed.add_field(
@@ -1118,8 +1138,11 @@ async def cmd_nowplaying(interaction: discord.Interaction):
         await interaction.response.send_message("❌ Nothing is playing!", ephemeral=True)
         return
 
-    loop_suffix = {"queue": " 🔁", "song": " 🔂"}.get(queue.loop_mode, "")
-    embed = build_now_playing_embed(queue.current, title=f"🎵 Now Playing{loop_suffix}")
+    embed = build_now_playing_embed(
+        queue.current,
+        label=f"🎵 Now Playing{loop_suffix(queue)}",
+        up_next=queue.queue[0]["title"] if queue.queue else None,
+    )
     await interaction.response.send_message(embed=embed, ephemeral=EPHEMERAL_REPLIES)
 
 
