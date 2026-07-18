@@ -1,4 +1,5 @@
 import asyncio
+import signal
 import sys
 import discord
 from discord.ext import commands
@@ -55,7 +56,35 @@ MAX_PLAYBACK_ERRORS = 3  # Max playback errors before stopping
 intents = discord.Intents.default()
 # intents.message_content = True
 intents.voice_states = True
-bot = commands.Bot(command_prefix="!", intents=intents)  # Set a prefix to avoid catching all messages
+class JukeboxBot(commands.Bot):
+    async def setup_hook(self):
+        # Handle shutdown signals from inside the event loop. The default ^C
+        # path (KeyboardInterrupt) cancels the gateway reader task before
+        # close() runs, so the voice_state_update confirming each voice
+        # disconnect is never processed and discord.py sits out its full 30s
+        # confirmation timeout per voice client. Closing while the loop (and
+        # gateway reader) is still running lets the confirmation arrive
+        # immediately.
+        self._shutdown_requested = False
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            loop.add_signal_handler(sig, self._on_shutdown_signal)
+
+    def _on_shutdown_signal(self):
+        if self._shutdown_requested:
+            logging.warning("Second shutdown signal received, forcing exit.")
+            os._exit(1)
+        self._shutdown_requested = True
+        logging.info("Shutdown signal received, closing client...")
+        asyncio.create_task(self.close())
+
+    async def close(self):
+        logging.info("Client close started")
+        await super().close()
+        logging.info("Client close finished")
+
+
+bot = JukeboxBot(command_prefix="!", intents=intents)  # Set a prefix to avoid catching all messages
 
 # yt-dlp configuration
 ytdl_format_options = {
@@ -985,8 +1014,23 @@ def load_opus():
         logging.info("Skip manual loading Opus library on this platform.")
 
 
+def _handle_sigterm(signum, frame):
+    # As PID 1 in a container, unhandled SIGTERM is discarded by the kernel,
+    # so `docker stop` would never reach us. This only covers the brief
+    # startup window before the event loop runs; once JukeboxBot.setup_hook
+    # installs its loop-level handlers, they supersede this one.
+    raise KeyboardInterrupt
+
+
 if __name__ == "__main__":
+    signal.signal(signal.SIGTERM, _handle_sigterm)
     load_opus()
     # log_handler=None: logging is already configured via basicConfig above;
     # discord.py would otherwise install a second handler and double-print.
     bot.run(TOKEN, log_handler=None)
+    # Discord cleanup (voice disconnect, websocket/http close) is done once
+    # bot.run() returns. In-flight yt-dlp extractions run on non-daemon
+    # executor threads that can't be cancelled and would otherwise block
+    # interpreter exit until their network calls finish - skip waiting on them.
+    logging.info("Shutdown complete, exiting.")
+    os._exit(0)
