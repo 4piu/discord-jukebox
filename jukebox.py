@@ -61,7 +61,20 @@ if COOKIES_FILE:
     else:
         logging.info(f"Using cookie file: {COOKIES_FILE}")
 
-MAX_PLAYBACK_ERRORS = 3  # Max playback errors before stopping
+# Max consecutive playback errors before stopping
+MAX_PLAYBACK_ERRORS = int(os.getenv("MAX_PLAYBACK_ERRORS", "3"))
+
+# Loop mode each guild starts with (and /stop resets to): "off", "song", or "queue"
+DEFAULT_LOOP_MODE = os.getenv("DEFAULT_LOOP_MODE", "queue").lower()
+if DEFAULT_LOOP_MODE not in ("off", "song", "queue"):
+    logging.warning("Invalid DEFAULT_LOOP_MODE '%s'; defaulting to queue", DEFAULT_LOOP_MODE)
+    DEFAULT_LOOP_MODE = "queue"
+
+# Played songs remembered per voice session (for /history, /previous);
+# -1 means unlimited, 0 disables history
+HISTORY_LIMIT = int(os.getenv("HISTORY_LIMIT", "50"))
+if HISTORY_LIMIT < 0:
+    HISTORY_LIMIT = None  # deque(maxlen=None) = unbounded
 
 # Discord bot setup - Slash commands only
 intents = discord.Intents.default()
@@ -213,6 +226,11 @@ class MusicQueue:
         # stale after_playing callback from a superseded song detect that it
         # should not advance the queue itself
         self.notify_mode = "mute"  # "on", "mute", or "off" - auto-advance announcements
+        self.loop_mode = DEFAULT_LOOP_MODE  # "off", "song", or "queue"
+        self.history = deque(maxlen=HISTORY_LIMIT)  # Songs played this voice
+        # session, oldest first; cleared when the bot leaves voice
+        self.skip_requested = False  # Set by /skip, consumed once by
+        # advance_queue so a skip advances even under loop_mode "song"
 
     def add(self, song_data, position="end"):
         """Add a song to the queue
@@ -487,7 +505,10 @@ async def play_song(guild_id, channel, song_info):
             queue.increment_error_count()
         else:
             queue.reset_error_count()
-        asyncio.run_coroutine_threadsafe(advance_queue(guild_id, channel), bot.loop)
+        asyncio.run_coroutine_threadsafe(
+            advance_queue(guild_id, channel, finished=song_info, errored=bool(error)),
+            bot.loop,
+        )
 
     voice_client = guild.voice_client
     if voice_client.is_playing() or voice_client.is_paused():
@@ -505,10 +526,15 @@ async def send_notification(channel, queue, *, embed):
     await channel.send(embed=embed, silent=(queue.notify_mode == "mute"))
 
 
-async def advance_queue(guild_id, channel):
-    """Play the next queued song, or stop if the queue is empty or too many
-    consecutive errors have piled up"""
+async def advance_queue(guild_id, channel, finished=None, errored=False):
+    """Play the next song after `finished` ended (or kick off playback when
+    called with no `finished`, e.g. from /play on an idle queue), honoring the
+    guild's loop mode. Stops if the queue is empty or too many consecutive
+    errors have piled up."""
     queue = get_queue(guild_id)
+
+    skip_requested = queue.skip_requested
+    queue.skip_requested = False
 
     if queue.get_error_count() >= MAX_PLAYBACK_ERRORS:
         queue.is_playing = False
@@ -521,6 +547,23 @@ async def advance_queue(guild_id, channel):
         await send_notification(channel, queue, embed=embed)
         logging.warning(f"Stopped playback in guild {guild_id} after {MAX_PLAYBACK_ERRORS} consecutive errors")
         return
+
+    if finished is not None and not errored:
+        # Log it, unless this is just the same song coming around again
+        # (song-loop replays, or a one-song ring under queue-loop).
+        if not queue.history or queue.history[-1] is not finished:
+            queue.history.append(finished)
+        if queue.loop_mode == "song" and not skip_requested:
+            # Replay without an announcement - repeats aren't news. On
+            # extraction failure fall through to normal advancement; the
+            # error breaker above caps how often this can retry.
+            if await play_song(guild_id, channel, finished):
+                return
+            queue.increment_error_count()
+            await advance_queue(guild_id, channel)
+            return
+        if queue.loop_mode == "queue":
+            queue.add(finished, "end")
 
     if not queue.queue:
         queue.is_playing = False
@@ -547,6 +590,22 @@ async def on_ready():
         logging.info(f"Synced {len(synced)} command(s)")
     except Exception as e:
         logging.error(f"Failed to sync commands: {e}")
+
+
+@bot.event
+async def on_voice_state_update(member, before, after):
+    """End the playback session when the bot leaves voice for any reason
+    (/leave, kicked, dragged out and disconnected): forget what was playing
+    and clear the session history. The queue itself is kept so a /join +
+    /play can pick up where things left off."""
+    if member.id != bot.user.id or after.channel is not None:
+        return
+    queue = get_queue(member.guild.id)
+    queue.generation += 1  # stale-ify any in-flight after_playing callback
+    queue.current = None
+    queue.is_playing = False
+    queue.skip_requested = False
+    queue.history.clear()
 
 
 INVITE_RE = re.compile(
@@ -795,6 +854,11 @@ async def cmd_queue(interaction: discord.Interaction):
         return
 
     embed = discord.Embed(title="Music Queue", color=0x0099FF)
+    loop_label = {"queue": "🔁 Looping the queue", "song": "🔂 Looping the current song"}.get(
+        queue.loop_mode
+    )
+    if loop_label:
+        embed.description = loop_label
 
     if queue.current:
         embed.add_field(
@@ -827,10 +891,74 @@ async def cmd_skip(interaction: discord.Interaction):
         return
 
     if interaction.guild.voice_client and interaction.guild.voice_client.is_playing():
+        queue = get_queue(interaction.guild.id)
+        # Under loop_mode "song", advance_queue would otherwise replay the
+        # skipped song; this flag makes it advance once. Under "queue" the
+        # skipped song still re-appends - the ring keeps turning.
+        queue.skip_requested = True
         interaction.guild.voice_client.stop()
         await interaction.response.send_message("⏭️ Skipped!")
     else:
         await interaction.response.send_message("❌ Nothing is playing!", ephemeral=True)
+
+
+@bot.tree.command(name="previous", description="Go back and play the previously played song")
+async def cmd_previous(interaction: discord.Interaction):
+    if not await ensure_guild(interaction):
+        return
+
+    queue = get_queue(interaction.guild.id)
+
+    if not interaction.guild.voice_client:
+        await interaction.response.send_message(
+            "❌ I'm not in a voice channel!", ephemeral=True
+        )
+        return
+
+    # Walk history back to the most recent song that isn't the one already
+    # playing (identity check: a looping song logs itself once but IS current).
+    target = None
+    for i in range(len(queue.history) - 1, -1, -1):
+        if queue.history[i] is not queue.current:
+            target = queue.history[i]
+            del queue.history[i]
+            break
+
+    if target is None and queue.current is None:
+        await interaction.response.send_message(
+            "📭 Nothing has been played yet!", ephemeral=True
+        )
+        return
+
+    await interaction.response.defer()
+
+    if target is None:
+        # Empty history: restart the current song from the beginning.
+        if await play_song(interaction.guild.id, interaction.channel, queue.current):
+            await interaction.followup.send(
+                f"⏮️ No previous song - restarting **{queue.current['title']}**"
+            )
+        else:
+            await interaction.followup.send("❌ Failed to restart the current song")
+        return
+
+    # Under queue-loop the finished song was re-appended to the ring; pull that
+    # copy (same object) back out so it doesn't come around twice.
+    for i, song in enumerate(queue.queue):
+        if song is target:
+            del queue.queue[i]
+            break
+
+    interrupted = queue.current
+    if await play_song(interaction.guild.id, interaction.channel, target):
+        # Keep the interrupted song next in line, so /skip returns forward to
+        # it. (Safe to add after starting: the queue isn't consumed until the
+        # previous song finishes playing.)
+        if interrupted:
+            queue.add(interrupted, "next")
+        await interaction.followup.send(f"⏮️ Playing previous: **{target['title']}**")
+    else:
+        await interaction.followup.send(f"❌ Failed to play **{target['title']}**")
 
 
 @bot.tree.command(name="join", description="Join your voice channel")
@@ -869,6 +997,11 @@ async def cmd_leave(interaction: discord.Interaction):
         queue = get_queue(interaction.guild.id)
         queue.clear()
         queue.is_playing = False
+        queue.current = None
+        queue.history.clear()
+        # Stale-ify the pending after_playing callback now rather than waiting
+        # for on_voice_state_update, so nothing tries to advance mid-disconnect.
+        queue.generation += 1
         await interaction.guild.voice_client.disconnect()
         await interaction.response.send_message("👋 Left the voice channel")
     else:
@@ -886,6 +1019,11 @@ async def cmd_stop(interaction: discord.Interaction):
         queue = get_queue(interaction.guild.id)
         queue.clear()
         queue.is_playing = False
+        queue.current = None
+        queue.loop_mode = DEFAULT_LOOP_MODE
+        # Stale-ify the pending after_playing callback so the loop mode can't
+        # resurrect the stopped song. History is kept: it already played.
+        queue.generation += 1
         interaction.guild.voice_client.stop()
         await interaction.response.send_message("⏹️ Stopped playing and cleared queue!")
     else:
@@ -957,7 +1095,8 @@ async def cmd_nowplaying(interaction: discord.Interaction):
         await interaction.response.send_message("❌ Nothing is playing!", ephemeral=True)
         return
 
-    embed = build_now_playing_embed(queue.current)
+    loop_suffix = {"queue": " 🔁", "song": " 🔂"}.get(queue.loop_mode, "")
+    embed = build_now_playing_embed(queue.current, title=f"🎵 Now Playing{loop_suffix}")
     await interaction.response.send_message(embed=embed)
 
 
@@ -979,6 +1118,49 @@ async def cmd_notifications(interaction: discord.Interaction, mode: app_commands
     queue = get_queue(interaction.guild.id)
     queue.notify_mode = mode.value
     await interaction.response.send_message(f"🔔 Notifications set to **{mode.name}**", ephemeral=True)
+
+
+@bot.tree.command(name="loop", description="Set the loop mode")
+@app_commands.choices(
+    mode=[
+        app_commands.Choice(name="🔁 Queue - repeat all songs in the queue (default)", value="queue"),
+        app_commands.Choice(name="🔂 Song - repeat the current song", value="song"),
+        app_commands.Choice(name="Off - play each song once", value="off"),
+    ]
+)
+async def cmd_loop(interaction: discord.Interaction, mode: app_commands.Choice[str]):
+    if not await ensure_guild(interaction):
+        return
+
+    queue = get_queue(interaction.guild.id)
+    queue.loop_mode = mode.value
+    await interaction.response.send_message(f"Loop mode set to **{mode.name}**")
+
+
+@bot.tree.command(name="history", description="Show songs played this session")
+async def cmd_history(interaction: discord.Interaction):
+    if not await ensure_guild(interaction):
+        return
+
+    queue = get_queue(interaction.guild.id)
+
+    if not queue.history:
+        await interaction.response.send_message(
+            "📭 Nothing has been played yet!", ephemeral=True
+        )
+        return
+
+    embed = discord.Embed(title="📜 Playback History", color=0x0099FF)
+    history_text = ""
+    for i, song in enumerate(reversed(list(queue.history)[-10:]), 1):  # Most recent first
+        duration_str = f"({format_duration(song['duration'])})" if song["duration"] else ""
+        history_text += f"**{i}.** **{song['title']}** {duration_str}\n   Requested by {song['requester'].mention}\n\n"
+    embed.add_field(name="Most recent first", value=history_text[:1024], inline=False)
+
+    if len(queue.history) > 10:
+        embed.set_footer(text=f"And {len(queue.history) - 10} more this session")
+
+    await interaction.response.send_message(embed=embed)
 
 
 @bot.tree.command(name="clear", description="Clear the queue")

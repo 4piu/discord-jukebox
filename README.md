@@ -32,11 +32,14 @@ All commands use Discord's modern slash command system (`/`):
 - `/playnext <song>` - Add song to play next in queue
 - `/playnow <song>` - Skip current song and play immediately
 - `/skip` - Skip current song
+- `/previous` - Go back and play the previously played song (restarts the current song if there is no history)
 - `/stop` - Stop and clear queue
 - `/pause` / `/resume` - Pause/resume playback
+- `/loop <queue|song|off>` - Set the loop mode (default: queue, so music keeps going)
 
 ### 📋 **Queue Management**
 - `/queue` - Show current queue with position numbers
+- `/history` - Show songs played this voice session (cleared when the bot leaves voice)
 - `/move <from> <to>` - Move songs between positions
 - `/remove <position>` - Remove song from specific position
 - `/shuffle` - Randomly shuffle the current queue
@@ -158,6 +161,10 @@ docker run -d \
 | `PLAYLIST_LIMIT` | Maximum songs in playlist (-1 for unlimited) | 50 | No |
 | `COOKIES_FILE` | Path to cookies file for yt-dlp authentication | - | No |
 | `LOG_LEVEL` | Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL) | INFO | No |
+| `DEFAULT_LOOP_MODE` | Loop mode each guild starts with: `queue`, `song`, or `off` | queue | No |
+| `HISTORY_LIMIT` | Songs remembered per voice session for `/history` and `/previous` (-1 for unlimited, 0 to disable) | 50 | No |
+| `MAX_PLAYBACK_ERRORS` | Consecutive playback errors before the bot stops trying | 3 | No |
+| `NO_COLOR` | Set to any non-empty value to disable colored log output (colors are on by default in a TTY or Docker) | - | No |
 
 ## Container Features
 

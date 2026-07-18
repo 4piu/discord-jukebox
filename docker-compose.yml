@@ -9,6 +9,11 @@ services:
       - TOKEN=${DISCORD_TOKEN}
       - PLAYLIST_LIMIT=${PLAYLIST_LIMIT:-50}
       - COOKIES_FILE=${COOKIES_FILE:-}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - DEFAULT_LOOP_MODE=${DEFAULT_LOOP_MODE:-queue}
+      - HISTORY_LIMIT=${HISTORY_LIMIT:-50}
+      - MAX_PLAYBACK_ERRORS=${MAX_PLAYBACK_ERRORS:-3}
+      - NO_COLOR=${NO_COLOR:-}
     volumes:
       # Optional: Mount a directory for temporary audio files if needed
       - ./temp:/tmp
