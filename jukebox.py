@@ -76,6 +76,17 @@ HISTORY_LIMIT = int(os.getenv("HISTORY_LIMIT", "50"))
 if HISTORY_LIMIT < 0:
     HISTORY_LIMIT = None  # deque(maxlen=None) = unbounded
 
+# Command receipts ("✅ Added to queue", "⏭️ Skipped!", ...) are shown only to
+# the invoker (ephemeral) to keep the channel quiet; the channel-wide signal is
+# the auto-announcement system governed by /notifications. Set to false to get
+# the old public replies back.
+EPHEMERAL_REPLIES = os.getenv("EPHEMERAL_REPLIES", "true").strip().lower() not in (
+    "0",
+    "false",
+    "no",
+    "off",
+)
+
 # Discord bot setup - Slash commands only
 intents = discord.Intents.default()
 # intents.message_content = True
@@ -704,7 +715,7 @@ async def cmd_play(interaction: discord.Interaction, query: str):
     if not await ensure_voice(interaction):
         return
 
-    await interaction.response.defer()
+    await interaction.response.defer(ephemeral=EPHEMERAL_REPLIES)
 
     queue = get_queue(interaction.guild.id)
 
@@ -750,7 +761,7 @@ async def cmd_playnow(interaction: discord.Interaction, query: str):
     if not await ensure_voice(interaction):
         return
 
-    await interaction.response.defer()
+    await interaction.response.defer(ephemeral=EPHEMERAL_REPLIES)
 
     queue = get_queue(interaction.guild.id)
 
@@ -807,7 +818,7 @@ async def cmd_playnext(interaction: discord.Interaction, query: str):
     if not await ensure_voice(interaction):
         return
 
-    await interaction.response.defer()
+    await interaction.response.defer(ephemeral=EPHEMERAL_REPLIES)
 
     queue = get_queue(interaction.guild.id)
 
@@ -882,7 +893,7 @@ async def cmd_queue(interaction: discord.Interaction):
 
         embed.set_footer(text="Use /move and /remove to manage the queue")
 
-    await interaction.response.send_message(embed=embed)
+    await interaction.response.send_message(embed=embed, ephemeral=EPHEMERAL_REPLIES)
 
 
 @bot.tree.command(name="skip", description="Skip the current song")
@@ -897,7 +908,7 @@ async def cmd_skip(interaction: discord.Interaction):
         # skipped song still re-appends - the ring keeps turning.
         queue.skip_requested = True
         interaction.guild.voice_client.stop()
-        await interaction.response.send_message("⏭️ Skipped!")
+        await interaction.response.send_message("⏭️ Skipped!", ephemeral=EPHEMERAL_REPLIES)
     else:
         await interaction.response.send_message("❌ Nothing is playing!", ephemeral=True)
 
@@ -930,7 +941,7 @@ async def cmd_previous(interaction: discord.Interaction):
         )
         return
 
-    await interaction.response.defer()
+    await interaction.response.defer(ephemeral=EPHEMERAL_REPLIES)
 
     if target is None:
         # Empty history: restart the current song from the beginning.
@@ -976,7 +987,9 @@ async def cmd_join(interaction: discord.Interaction):
     if interaction.guild.voice_client.channel != channel:
         try:
             await interaction.guild.voice_client.move_to(channel)
-            await interaction.response.send_message(f"🎧 Moved to {channel}")
+            await interaction.response.send_message(
+                f"🎧 Moved to {channel}", ephemeral=EPHEMERAL_REPLIES
+            )
         except Exception as e:
             logging.error(
                 f"Failed to move to voice channel {channel}: {e}", exc_info=True
@@ -985,7 +998,9 @@ async def cmd_join(interaction: discord.Interaction):
                 f"❌ Failed to move to voice channel: {str(e)}", ephemeral=True
             )
     else:
-        await interaction.response.send_message(f"🎧 Already connected to {channel}")
+        await interaction.response.send_message(
+            f"🎧 Already connected to {channel}", ephemeral=EPHEMERAL_REPLIES
+        )
 
 
 @bot.tree.command(name="leave", description="Leave the voice channel")
@@ -1003,7 +1018,9 @@ async def cmd_leave(interaction: discord.Interaction):
         # for on_voice_state_update, so nothing tries to advance mid-disconnect.
         queue.generation += 1
         await interaction.guild.voice_client.disconnect()
-        await interaction.response.send_message("👋 Left the voice channel")
+        await interaction.response.send_message(
+            "👋 Left the voice channel", ephemeral=EPHEMERAL_REPLIES
+        )
     else:
         await interaction.response.send_message(
             "❌ I'm not in a voice channel!", ephemeral=True
@@ -1025,7 +1042,9 @@ async def cmd_stop(interaction: discord.Interaction):
         # resurrect the stopped song. History is kept: it already played.
         queue.generation += 1
         interaction.guild.voice_client.stop()
-        await interaction.response.send_message("⏹️ Stopped playing and cleared queue!")
+        await interaction.response.send_message(
+            "⏹️ Stopped playing and cleared queue!", ephemeral=EPHEMERAL_REPLIES
+        )
     else:
         await interaction.response.send_message("❌ Not playing anything!", ephemeral=True)
 
@@ -1037,7 +1056,7 @@ async def pause_slash(interaction: discord.Interaction):
 
     if interaction.guild.voice_client and interaction.guild.voice_client.is_playing():
         interaction.guild.voice_client.pause()
-        await interaction.response.send_message("⏸️ Paused!")
+        await interaction.response.send_message("⏸️ Paused!", ephemeral=EPHEMERAL_REPLIES)
     else:
         await interaction.response.send_message("❌ Nothing is playing!", ephemeral=True)
 
@@ -1049,7 +1068,7 @@ async def cmd_resume(interaction: discord.Interaction):
 
     if interaction.guild.voice_client and interaction.guild.voice_client.is_paused():
         interaction.guild.voice_client.resume()
-        await interaction.response.send_message("▶️ Resumed!")
+        await interaction.response.send_message("▶️ Resumed!", ephemeral=EPHEMERAL_REPLIES)
     else:
         await interaction.response.send_message("❌ Nothing is paused!", ephemeral=True)
 
@@ -1079,9 +1098,13 @@ async def cmd_volume(interaction: discord.Interaction, volume: int):
     # Apply to current playing song if any
     if interaction.guild.voice_client.source:
         interaction.guild.voice_client.source.volume = volume_decimal
-        await interaction.response.send_message(f"🔊 Volume set to {volume}% (current song updated)")
+        await interaction.response.send_message(
+            f"🔊 Volume set to {volume}% (current song updated)", ephemeral=EPHEMERAL_REPLIES
+        )
     else:
-        await interaction.response.send_message(f"🔊 Volume set to {volume}% (will apply to next song)")
+        await interaction.response.send_message(
+            f"🔊 Volume set to {volume}% (will apply to next song)", ephemeral=EPHEMERAL_REPLIES
+        )
 
 
 @bot.tree.command(name="nowplaying", description="Show the currently playing song")
@@ -1097,7 +1120,7 @@ async def cmd_nowplaying(interaction: discord.Interaction):
 
     loop_suffix = {"queue": " 🔁", "song": " 🔂"}.get(queue.loop_mode, "")
     embed = build_now_playing_embed(queue.current, title=f"🎵 Now Playing{loop_suffix}")
-    await interaction.response.send_message(embed=embed)
+    await interaction.response.send_message(embed=embed, ephemeral=EPHEMERAL_REPLIES)
 
 
 @bot.tree.command(
@@ -1134,7 +1157,9 @@ async def cmd_loop(interaction: discord.Interaction, mode: app_commands.Choice[s
 
     queue = get_queue(interaction.guild.id)
     queue.loop_mode = mode.value
-    await interaction.response.send_message(f"Loop mode set to **{mode.name}**")
+    await interaction.response.send_message(
+        f"Loop mode set to **{mode.name}**", ephemeral=EPHEMERAL_REPLIES
+    )
 
 
 @bot.tree.command(name="history", description="Show songs played this session")
@@ -1160,7 +1185,7 @@ async def cmd_history(interaction: discord.Interaction):
     if len(queue.history) > 10:
         embed.set_footer(text=f"And {len(queue.history) - 10} more this session")
 
-    await interaction.response.send_message(embed=embed)
+    await interaction.response.send_message(embed=embed, ephemeral=EPHEMERAL_REPLIES)
 
 
 @bot.tree.command(name="clear", description="Clear the queue")
@@ -1170,7 +1195,7 @@ async def cmd_clear(interaction: discord.Interaction):
 
     queue = get_queue(interaction.guild.id)
     queue.clear()
-    await interaction.response.send_message("🗑️ Queue cleared!")
+    await interaction.response.send_message("🗑️ Queue cleared!", ephemeral=EPHEMERAL_REPLIES)
 
 
 @bot.tree.command(name="shuffle", description="Shuffle the queue")
@@ -1191,7 +1216,9 @@ async def cmd_shuffle(interaction: discord.Interaction):
 
     # Shuffle the queue
     queue.shuffle()
-    await interaction.response.send_message(f"🔀 Shuffled {len(queue_list)} songs in the queue!")
+    await interaction.response.send_message(
+        f"🔀 Shuffled {len(queue_list)} songs in the queue!", ephemeral=EPHEMERAL_REPLIES
+    )
 
 
 @bot.tree.command(name="move", description="Move a song to a different position in the queue")
@@ -1233,7 +1260,8 @@ async def cmd_move(
     queue.queue = deque(queue_list)
 
     await interaction.response.send_message(
-        f"✅ Moved **{song['title']}** from position {from_position} to position {to_position}"
+        f"✅ Moved **{song['title']}** from position {from_position} to position {to_position}",
+        ephemeral=EPHEMERAL_REPLIES,
     )
 
 
@@ -1266,7 +1294,8 @@ async def cmd_remove(interaction: discord.Interaction, position: int):
     queue.queue = deque(queue_list)
 
     await interaction.response.send_message(
-        f"❌ Removed **{removed_song['title']}** from position {position}"
+        f"❌ Removed **{removed_song['title']}** from position {position}",
+        ephemeral=EPHEMERAL_REPLIES,
     )
 
 

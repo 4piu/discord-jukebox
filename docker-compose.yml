@@ -14,6 +14,7 @@ services:
       - HISTORY_LIMIT=${HISTORY_LIMIT:-50}
       - MAX_PLAYBACK_ERRORS=${MAX_PLAYBACK_ERRORS:-3}
       - NO_COLOR=${NO_COLOR:-}
+      - EPHEMERAL_REPLIES=${EPHEMERAL_REPLIES:-true}
     volumes:
       # Optional: Mount a directory for temporary audio files if needed
       - ./temp:/tmp

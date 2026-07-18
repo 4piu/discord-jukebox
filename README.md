@@ -165,6 +165,7 @@ docker run -d \
 | `HISTORY_LIMIT` | Songs remembered per voice session for `/history` and `/previous` (-1 for unlimited, 0 to disable) | 50 | No |
 | `MAX_PLAYBACK_ERRORS` | Consecutive playback errors before the bot stops trying | 3 | No |
 | `NO_COLOR` | Set to any non-empty value to disable colored log output (colors are on by default in a TTY or Docker) | - | No |
+| `EPHEMERAL_REPLIES` | Command receipts are shown only to the invoker to keep the channel quiet; set to `false` for public replies. Channel-wide announcements are controlled with `/notifications` | true | No |
 
 ## Container Features
 
