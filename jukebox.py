@@ -751,11 +751,13 @@ async def play_song(guild_id, channel, song_info):
     return True
 
 
-async def send_notification(channel, queue, *, embed, view=None):
+async def send_notification(channel, queue, *, embed, view=None, force=False):
     """Send an automatic (not user-command-triggered) playback announcement,
     honoring the guild's notify_mode: 'on' sends normally, 'mute' sends
-    without pinging anyone, 'off' skips it entirely."""
-    if not channel or queue.notify_mode == "off":
+    without pinging anyone, 'off' skips it entirely. force=True bypasses the
+    'off' skip - used by /playnow, whose card is a deliberate manual
+    announcement rather than an automatic one."""
+    if not channel or (queue.notify_mode == "off" and not force):
         return
     # view is falsy when absent (None or discord.utils.MISSING)
     kwargs = {"view": view} if view else {}
@@ -809,12 +811,17 @@ async def advance_queue(guild_id, channel, finished=None, errored=False):
 
     if await play_song(guild_id, channel, song_info):
         queue.reset_error_count()
-        embed = build_now_playing_embed(
-            song_info,
-            label=f"🎵 Now Playing{loop_suffix(queue)}",
-            up_next=queue.queue[0]["title"] if queue.queue else None,
-        )
-        await send_notification(channel, queue, embed=embed, view=controls_view())
+        # A ring under loop_mode "queue" can cycle back to the exact song
+        # that just finished (e.g. a single-song queue) - skip the
+        # announcement then too, same reasoning as the song-loop skip above:
+        # nothing changed, so it isn't news.
+        if song_info is not finished:
+            embed = build_now_playing_embed(
+                song_info,
+                label=f"🎵 Now Playing{loop_suffix(queue)}",
+                up_next=queue.queue[0]["title"] if queue.queue else None,
+            )
+            await send_notification(channel, queue, embed=embed, view=controls_view())
     else:
         queue.increment_error_count()
         await advance_queue(guild_id, channel)
@@ -1033,7 +1040,14 @@ async def cmd_playnow(interaction: discord.Interaction, query: str):
                 inline=False,
             )
 
-        await interaction.followup.send(embed=embed, view=controls_view())
+        # /playnow interrupts whatever was playing for everyone in the
+        # channel, so - unlike other command receipts - it stays public even
+        # with EPHEMERAL_REPLIES on; it doubles as the announcement. Sent
+        # through send_notification (force=True to bypass notify_mode "off")
+        # rather than the followup, because once the interaction was
+        # deferred ephemeral, Discord locks every followup to ephemeral too.
+        await send_notification(interaction.channel, queue, embed=embed, view=controls_view(), force=True)
+        await interaction.followup.send("▶️ Playing now!", ephemeral=EPHEMERAL_REPLIES)
 
     except Exception as e:
         logging.error(f"Error in playnow command: {e}", exc_info=True)
