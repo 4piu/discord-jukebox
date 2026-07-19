@@ -1,4 +1,5 @@
 import asyncio
+import json
 import queue as thread_queue
 import re
 import shlex
@@ -120,6 +121,14 @@ AUTO_LEAVE_SECONDS = int(os.getenv("AUTO_LEAVE_SECONDS", "300"))
 # /pause is left alone). Independent of AUTO_LEAVE_SECONDS.
 AUTO_PAUSE = env_flag("AUTO_PAUSE", "true")
 
+# Per-guild queue, loop/notify mode, and volume survive a restart via a small
+# JSON snapshot at this path (relative to the working directory by default -
+# /app in the container). Written after each meaningful change and on clean
+# shutdown; loaded once at startup. In Docker, mount a host path over this
+# file (or its parent directory) for it to survive container recreation, not
+# just an in-place restart - see README.
+STATE_FILE = os.getenv("STATE_FILE", "state.json")
+
 # Command receipts ("✅ Added to queue", "⏭️ Skipped!", ...) are shown only to
 # the invoker (ephemeral) to keep the channel quiet; the channel-wide signal is
 # the auto-announcement system governed by /notifications. Set to false to get
@@ -161,6 +170,7 @@ class JukeboxBot(commands.Bot):
 
     async def close(self):
         logging.info("Client close started")
+        save_state()
         await super().close()
         logging.info("Client close finished")
 
@@ -517,6 +527,69 @@ def get_queue(guild_id):
     return music_queues[guild_id]
 
 
+def save_state():
+    """Snapshot each guild's queue (current song first, if one is actually
+    playing) plus loop_mode/notify_mode/volume to STATE_FILE. Guilds sitting
+    at all-default values are skipped so the file only tracks what's worth
+    restoring. Written via a temp file + rename so a crash mid-write can't
+    leave a corrupt file behind."""
+    guilds = {}
+    for guild_id, queue in music_queues.items():
+        songs = list(queue.queue)
+        if queue.current and queue.is_playing:
+            songs = [queue.current] + songs
+        is_default = (
+            not songs
+            and queue.loop_mode == DEFAULT_LOOP_MODE
+            and queue.notify_mode == "mute"
+            and queue.volume == 0.5
+        )
+        if is_default:
+            continue
+        guilds[str(guild_id)] = {
+            "loop_mode": queue.loop_mode,
+            "notify_mode": queue.notify_mode,
+            "volume": queue.volume,
+            "queue": [song_to_dict(s) for s in songs],
+        }
+
+    try:
+        tmp_path = f"{STATE_FILE}.tmp"
+        with open(tmp_path, "w") as f:
+            json.dump({"guilds": guilds}, f)
+        os.replace(tmp_path, STATE_FILE)
+    except OSError as e:
+        logging.warning(f"Failed to save state to {STATE_FILE}: {e}")
+
+
+def load_state():
+    """Restore queues/settings saved by save_state(). Missing or corrupt
+    state is not fatal - just start fresh, same as a first run."""
+    try:
+        with open(STATE_FILE) as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        return
+    except (OSError, json.JSONDecodeError) as e:
+        logging.warning(f"Failed to load state from {STATE_FILE}: {e}")
+        return
+
+    restored = 0
+    for guild_id_str, saved in data.get("guilds", {}).items():
+        try:
+            queue = get_queue(int(guild_id_str))
+            queue.loop_mode = saved.get("loop_mode", DEFAULT_LOOP_MODE)
+            queue.notify_mode = saved.get("notify_mode", "mute")
+            queue.volume = saved.get("volume", 0.5)
+            queue.queue = deque(song_from_dict(s) for s in saved.get("queue", []))
+            restored += 1
+        except Exception:
+            logging.warning(f"Skipping corrupt saved state for guild {guild_id_str}", exc_info=True)
+
+    if restored:
+        logging.info(f"Restored persisted state for {restored} guild(s) from {STATE_FILE}")
+
+
 async def ensure_guild(interaction: discord.Interaction) -> bool:
     """
     Ensures the command is used in a guild (not DMs).
@@ -685,6 +758,44 @@ def build_song_info(entry, requester):
     }
 
 
+class RequesterRef:
+    """Stand-in for a discord.Member/User after loading a persisted song.
+
+    Only `.mention` is ever read on `requester` (grep confirms it), and a
+    mention is just Discord markup built from the id - so restoring the
+    actual Member/User object (which needs it to be in the client's cache,
+    not guaranteed right after a restart) is unnecessary."""
+
+    def __init__(self, user_id):
+        self.id = user_id
+
+    @property
+    def mention(self):
+        return f"<@{self.id}>"
+
+
+def song_to_dict(song):
+    """Serialize a queue song for the state file. `requester` collapses to
+    just its id - see RequesterRef."""
+    return {
+        "url": song["url"],
+        "title": song["title"],
+        "duration": song["duration"],
+        "uploader": song["uploader"],
+        "requester_id": song["requester"].id,
+    }
+
+
+def song_from_dict(d):
+    return {
+        "url": d["url"],
+        "title": d["title"],
+        "duration": d["duration"],
+        "uploader": d["uploader"],
+        "requester": RequesterRef(d["requester_id"]),
+    }
+
+
 def loop_suffix(queue):
     """Loop-mode emoji for card labels, with a leading space ('' when off)"""
     return {"song": " 🔂", "queue": " 🔁"}.get(queue.loop_mode, "")
@@ -820,12 +931,14 @@ async def advance_queue(guild_id, channel, finished=None, errored=False):
 
     if not queue.queue:
         queue.is_playing = False
+        save_state()
         return
 
     song_info = queue.get_next()
 
     if await play_song(guild_id, channel, song_info):
         queue.reset_error_count()
+        save_state()
         # A ring under loop_mode "queue" can cycle back to the exact song
         # that just finished (e.g. a single-song queue) - skip the
         # announcement then too, same reasoning as the song-loop skip above:
@@ -1050,6 +1163,7 @@ async def cmd_play(interaction: discord.Interaction, query: str):
         # Add all songs to queue
         for entry in entries:
             queue.add(build_song_info(entry, interaction.user), "end")
+        save_state()
 
         # Send response based on single vs playlist
         await interaction.followup.send(
@@ -1106,6 +1220,7 @@ async def cmd_playnow(interaction: discord.Interaction, query: str):
             await interaction.followup.send(f"❌ Failed to play **{song_info['title']}**")
             return
         queue.reset_error_count()
+        save_state()
 
         embed = build_now_playing_embed(
             song_info,
@@ -1161,6 +1276,7 @@ async def cmd_playnext(interaction: discord.Interaction, query: str):
         # Add all songs to front of queue in reverse order so first song plays first
         for entry in reversed(entries):
             queue.add(build_song_info(entry, interaction.user), "next")
+        save_state()
 
         await interaction.followup.send(
             f"📃 Added to queue: **{entries[0]['title']}**"
@@ -1264,6 +1380,7 @@ async def set_loop_impl(interaction: discord.Interaction, mode):
     """Set the loop mode - shared by /loop and the loop-mode buttons"""
     queue = get_queue(interaction.guild.id)
     queue.loop_mode = mode
+    save_state()
     await interaction.response.send_message(
         f"Loop mode set to **{LOOP_MODE_LABELS[mode]}**", ephemeral=EPHEMERAL_REPLIES
     )
@@ -1375,6 +1492,7 @@ async def previous_impl(interaction: discord.Interaction):
         # previous song finishes playing.)
         if interrupted:
             queue.add(interrupted, "next")
+        save_state()
         await interaction.followup.send(f"⏮️ Playing previous: **{target['title']}**")
     else:
         await interaction.followup.send(f"❌ Failed to play **{target['title']}**")
@@ -1432,6 +1550,7 @@ async def cmd_leave(interaction: discord.Interaction):
         # Stale-ify the pending after_playing callback now rather than waiting
         # for on_voice_state_update, so nothing tries to advance mid-disconnect.
         queue.generation += 1
+        save_state()
         await interaction.guild.voice_client.disconnect()
         await interaction.response.send_message(
             "👋 Left the voice channel", ephemeral=EPHEMERAL_REPLIES
@@ -1456,6 +1575,7 @@ async def cmd_stop(interaction: discord.Interaction):
         # Stale-ify the pending after_playing callback so the loop mode can't
         # resurrect the stopped song. History is kept: it already played.
         queue.generation += 1
+        save_state()
         interaction.guild.voice_client.stop()
         await interaction.response.send_message(
             "⏹️ Stopped playing and cleared queue!", ephemeral=EPHEMERAL_REPLIES
@@ -1509,6 +1629,7 @@ async def cmd_volume(interaction: discord.Interaction, volume: int):
     volume_decimal = volume / 100
     queue = get_queue(interaction.guild.id)
     queue.set_volume(volume_decimal)
+    save_state()
 
     # Apply to current playing song if any
     if interaction.guild.voice_client.source:
@@ -1563,6 +1684,7 @@ async def cmd_notifications(interaction: discord.Interaction, mode: app_commands
 
     queue = get_queue(interaction.guild.id)
     queue.notify_mode = mode.value
+    save_state()
     await interaction.response.send_message(
         f"🔔 Notifications set to **{NOTIFY_MODE_LABELS[mode.value]}**", ephemeral=True
     )
@@ -1619,6 +1741,7 @@ async def cmd_clear(interaction: discord.Interaction):
 
     queue = get_queue(interaction.guild.id)
     queue.clear()
+    save_state()
     await interaction.response.send_message("🗑️ Queue cleared!", ephemeral=EPHEMERAL_REPLIES)
 
 
@@ -1640,6 +1763,7 @@ async def cmd_shuffle(interaction: discord.Interaction):
 
     # Shuffle the queue
     queue.shuffle()
+    save_state()
     await interaction.response.send_message(
         f"🔀 Shuffled {len(queue_list)} songs in the queue!", ephemeral=EPHEMERAL_REPLIES
     )
@@ -1682,6 +1806,7 @@ async def cmd_move(
 
     # Update the queue
     queue.queue = deque(queue_list)
+    save_state()
 
     await interaction.response.send_message(
         f"✅ Moved **{song['title']}** from position {from_position} to position {to_position}",
@@ -1716,6 +1841,7 @@ async def cmd_remove(interaction: discord.Interaction, position: int):
 
     # Update the queue
     queue.queue = deque(queue_list)
+    save_state()
 
     await interaction.response.send_message(
         f"❌ Removed **{removed_song['title']}** from position {position}",
@@ -1759,6 +1885,7 @@ def _handle_sigterm(signum, frame):
 if __name__ == "__main__":
     signal.signal(signal.SIGTERM, _handle_sigterm)
     load_opus()
+    load_state()
     # log_handler=None: logging is already configured via basicConfig above;
     # discord.py would otherwise install a second handler and double-print.
     bot.run(TOKEN, log_handler=None)

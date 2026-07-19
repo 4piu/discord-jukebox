@@ -9,6 +9,7 @@ A Discord music bot.
 - **Modern Slash Commands** - All commands use Discord's `/` syntax with auto-complete
 - **Control Buttons** - Every now-playing card carries playback buttons (⏮️ ⏯️ ⏭️ / 🔁 🔂 ↪️), so no typing needed for the common actions
 - **Auto-Leave / Auto-Pause** - Pauses (and later leaves) voice when left alone in the channel, so an empty room doesn't keep streaming
+- **Persistent Queue** - Each guild's queue, loop/notify mode, and volume survive a restart (session-scoped `/history` and mid-song position are not persisted)
 - Play music from YouTube, SoundCloud, and other supported platforms
 - Advanced queue system with flexible positioning
 - Playlist support
@@ -171,6 +172,7 @@ docker run -d \
 | `CONTROL_BUTTONS` | Playback control buttons (⏮️ ⏯️ ⏭️ / 🔁 🔂 ↪️) on now-playing cards; set to `false` for plain cards | true | No |
 | `AUTO_LEAVE_SECONDS` | Leave voice after being alone (no other members) for this many seconds; `0` disables auto-leave | 300 | No |
 | `AUTO_PAUSE` | Pause playback while alone in the voice channel and resume when someone rejoins; a manual `/pause` is left alone | true | No |
+| `STATE_FILE` | Path to the JSON snapshot used to restore each guild's queue, loop/notify mode, and volume after a restart | state.json | No |
 | `AUDIO_BUFFER_SECONDS` | PCM audio retained ahead of Discord playback to absorb short media/network stalls; `0` disables it | 3 | No |
 | `AUDIO_BUFFER_STARTUP_SECONDS` | PCM to collect before playback begins; capped by `AUDIO_BUFFER_SECONDS` | 1 | No |
 

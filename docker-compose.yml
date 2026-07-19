@@ -20,9 +20,19 @@ services:
       - AUTO_PAUSE=${AUTO_PAUSE:-true}
       - AUDIO_BUFFER_SECONDS=${AUDIO_BUFFER_SECONDS:-3}
       - AUDIO_BUFFER_STARTUP_SECONDS=${AUDIO_BUFFER_STARTUP_SECONDS:-1}
+      - STATE_FILE=${STATE_FILE:-state.json}
     volumes:
       # Optional: Mount a directory for temporary audio files if needed
       - ./temp:/tmp
+      # Optional: Persist the queue/loop/notify/volume snapshot across
+      # container recreation (docker compose pull && up), not just an
+      # in-place restart. Without this mount, state.json still exists but
+      # only inside the container's writable layer, so it's lost whenever
+      # the container is recreated. Uncomment to enable; the host file must
+      # exist and be writable by uid 1001 (the container's non-root user)
+      # before the first run:
+      #   touch ./state.json && chmod 666 ./state.json
+      # - ./state.json:/app/state.json
       # Optional: Mount cookie file for yt-dlp authentication
       # Uncomment and modify the path below if you want to use cookies
       # - ./cookies.txt:/app/cookies.txt
