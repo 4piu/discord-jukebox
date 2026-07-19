@@ -1109,7 +1109,11 @@ async def cmd_queue(interaction: discord.Interaction):
         await interaction.response.send_message("📭 Queue is empty!", ephemeral=True)
         return
 
-    embed = discord.Embed(title="Music Queue", color=0x0099FF)
+    total_songs = len(queue_list) + (1 if queue.current else 0)
+    embed = discord.Embed(
+        title=f"📃 Music Queue · {total_songs} song{'s' if total_songs != 1 else ''}",
+        color=0x0099FF,
+    )
     loop_label = {"queue": "🔁 Looping the queue", "song": "🔂 Looping the current song"}.get(
         queue.loop_mode
     )
@@ -1117,19 +1121,26 @@ async def cmd_queue(interaction: discord.Interaction):
         embed.description = loop_label
 
     if queue.current:
+        details = []
+        if queue.current["duration"]:
+            details.append(format_duration(queue.current["duration"]))
+        details.append(f"requested by {queue.current['requester'].mention}")
         embed.add_field(
             name="🎵 Now Playing",
-            value=f"**{queue.current['title']}**\nRequested by {queue.current['requester'].mention}",
+            value=f"**{queue.current['title']}** · " + " · ".join(details),
             inline=False,
         )
 
     if queue_list:
-        queue_text = ""
+        lines = []
         for i, song in enumerate(queue_list[:10], 1):  # Show first 10 songs
-            duration_str = f"({format_duration(song['duration'])})" if song["duration"] else ""
-            queue_text += f"**{i}.** **{song['title']}** {duration_str}\n   Requested by {song['requester'].mention}\n\n"
+            details = []
+            if song["duration"]:
+                details.append(format_duration(song["duration"]))
+            details.append(song["requester"].mention)
+            lines.append(f"`{i}.` **{song['title']}** · " + " · ".join(details))
 
-        embed.add_field(name="📃 Up Next", value=queue_text[:1024], inline=False)
+        embed.add_field(name="⏭️ Up Next", value="\n".join(lines)[:1024], inline=False)
 
         if len(queue_list) > 10:
             embed.add_field(
