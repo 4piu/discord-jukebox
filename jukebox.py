@@ -110,6 +110,16 @@ AUDIO_BUFFER_STARTUP_SECONDS = env_nonnegative_float(
 )
 
 
+# Leave voice automatically after being alone (no non-bot members left in the
+# channel) for this many seconds, so an empty channel doesn't keep streaming
+# audio and running ffmpeg indefinitely. 0 disables auto-leave.
+AUTO_LEAVE_SECONDS = int(os.getenv("AUTO_LEAVE_SECONDS", "300"))
+
+# Pause playback while alone in the voice channel and resume it when someone
+# rejoins (only if the auto-pause itself caused the pause - a deliberate
+# /pause is left alone). Independent of AUTO_LEAVE_SECONDS.
+AUTO_PAUSE = env_flag("AUTO_PAUSE", "true")
+
 # Command receipts ("✅ Added to queue", "⏭️ Skipped!", ...) are shown only to
 # the invoker (ephemeral) to keep the channel quiet; the channel-wide signal is
 # the auto-announcement system governed by /notifications. Set to false to get
@@ -440,6 +450,11 @@ class MusicQueue:
         # session, oldest first; cleared when the bot leaves voice
         self.skip_requested = False  # Set by /skip, consumed once by
         # advance_queue so a skip advances even under loop_mode "song"
+        self.auto_paused = False  # True while paused because the channel is
+        # empty (AUTO_PAUSE), so a later rejoin knows to resume; left False
+        # (and untouched) for a deliberate /pause
+        self.leave_task = None  # Pending AUTO_LEAVE_SECONDS disconnect timer,
+        # cancelled if someone rejoins first
 
     def add(self, song_data, position="end"):
         """Add a song to the queue
@@ -840,20 +855,86 @@ async def on_ready():
         logging.error(f"Failed to sync commands: {e}")
 
 
+def voice_channel_is_empty(channel):
+    """True if no non-bot members remain in a voice channel."""
+    return not any(not m.bot for m in channel.members)
+
+
+def cancel_auto_leave(queue):
+    if queue.leave_task and not queue.leave_task.done():
+        queue.leave_task.cancel()
+    queue.leave_task = None
+
+
+async def auto_leave_after_delay(guild_id, voice_client):
+    """Disconnect after AUTO_LEAVE_SECONDS alone in the channel. Cancelled by
+    cancel_auto_leave() if someone rejoins first; the emptiness recheck below
+    is a last-moment safety net against that race."""
+    try:
+        await asyncio.sleep(AUTO_LEAVE_SECONDS)
+    except asyncio.CancelledError:
+        return
+    if voice_client.is_connected() and voice_channel_is_empty(voice_client.channel):
+        logging.info(f"Auto-leaving voice in guild {guild_id}: alone for {AUTO_LEAVE_SECONDS}s")
+        await voice_client.disconnect()
+
+
+async def on_channel_emptied(guild_id, voice_client, queue):
+    """Everyone left the bot alone in its voice channel: optionally pause
+    playback and/or schedule an auto-leave."""
+    if AUTO_PAUSE and voice_client.is_playing():
+        voice_client.pause()
+        queue.auto_paused = True
+
+    if AUTO_LEAVE_SECONDS > 0 and (queue.leave_task is None or queue.leave_task.done()):
+        queue.leave_task = asyncio.create_task(auto_leave_after_delay(guild_id, voice_client))
+
+
+def on_channel_repopulated(voice_client, queue):
+    """Someone (re)joined the bot's voice channel: cancel any pending
+    auto-leave timer and resume playback if AUTO_PAUSE was the one that
+    paused it (a deliberate /pause is left alone)."""
+    cancel_auto_leave(queue)
+    if queue.auto_paused and voice_client.is_paused():
+        voice_client.resume()
+    queue.auto_paused = False
+
+
 @bot.event
 async def on_voice_state_update(member, before, after):
-    """End the playback session when the bot leaves voice for any reason
-    (/leave, kicked, dragged out and disconnected): forget what was playing
-    and clear the session history. The queue itself is kept so a /join +
-    /play can pick up where things left off."""
-    if member.id != bot.user.id or after.channel is not None:
+    guild = member.guild
+
+    if member.id == bot.user.id:
+        if after.channel is not None:
+            return
+        # End the playback session when the bot leaves voice for any reason
+        # (/leave, kicked, dragged out, auto-leave, disconnected): forget
+        # what was playing and clear the session history. The queue itself
+        # is kept so a /join + /play can pick up where things left off.
+        queue = get_queue(guild.id)
+        queue.generation += 1  # stale-ify any in-flight after_playing callback
+        queue.current = None
+        queue.is_playing = False
+        queue.skip_requested = False
+        queue.auto_paused = False
+        queue.history.clear()
+        cancel_auto_leave(queue)
         return
-    queue = get_queue(member.guild.id)
-    queue.generation += 1  # stale-ify any in-flight after_playing callback
-    queue.current = None
-    queue.is_playing = False
-    queue.skip_requested = False
-    queue.history.clear()
+
+    voice_client = guild.voice_client
+    if not voice_client:
+        return
+    # Only react to joins/leaves touching the channel we're actually in.
+    if voice_client.channel.id not in (
+        getattr(before.channel, "id", None), getattr(after.channel, "id", None)
+    ):
+        return
+
+    queue = get_queue(guild.id)
+    if voice_channel_is_empty(voice_client.channel):
+        await on_channel_emptied(guild.id, voice_client, queue)
+    else:
+        on_channel_repopulated(voice_client, queue)
 
 
 INVITE_RE = re.compile(
