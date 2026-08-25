@@ -11,7 +11,7 @@ requires-python = ">=3.14"
 dependencies = [
     "discord-py[voice]>=2.7.1",
     "python-dotenv>=1.2.3",
-    "yt-dlp>=2026.7.4",
+    "yt-dlp>=2026.8.19",
 ]
 
 [tool.uv]
